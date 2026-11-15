@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist/cjs",
+    "rootDir": "src",
+    "noEmit": false,
+
+    // The CJS leg. `verbatimModuleSyntax` must be off here: it rejects ESM
+    // syntax when emitting CommonJS, and the sources are written as ESM.
+    "module": "CommonJS",
+    "moduleResolution": "Node10",
+    "verbatimModuleSyntax": false
+  },
+  "include": ["src"]
+}
