@@ -15,6 +15,19 @@ import {VERSION} from '../src/index.js';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const srcDir = join(root, 'src');
 
+/**
+ * Strips comments, so the scanners below judge CODE rather than prose.
+ *
+ * A doc comment naming `Math.random` to say what an option defaults to is not
+ * a determinism violation; a call to it is. The atomicity scanner has always
+ * stripped comments for this reason, and the determinism scanners now do too.
+ */
+function codeOnly(path: string): string {
+  return readFileSync(path, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+}
+
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, {withFileTypes: true}).flatMap((entry) => {
     const path = join(dir, entry.name);
@@ -44,9 +57,9 @@ describe('determinism seams', () => {
   it('names Date.now and setTimeout only in time.ts', () => {
     const offenders = sourceFiles(srcDir)
       .filter((path) => !path.endsWith('time.ts'))
-      .filter((path) => /\bDate\.now\b|\bsetTimeout\b|\bsetInterval\b|\bclearTimeout\b/.test(
-        readFileSync(path, 'utf8')
-      ))
+      .filter((path) =>
+        /\bDate\.now\b|\bsetTimeout\b|\bsetInterval\b|\bclearTimeout\b/.test(codeOnly(path))
+      )
       .map((path) => path.slice(srcDir.length + 1));
 
     // Anything here would be a hidden source of real time, which is how a
@@ -57,7 +70,7 @@ describe('determinism seams', () => {
   it('names Math.random only in random.ts', () => {
     const offenders = sourceFiles(srcDir)
       .filter((path) => !path.endsWith('random.ts'))
-      .filter((path) => /\bMath\.random\b/.test(readFileSync(path, 'utf8')))
+      .filter((path) => /\bMath\.random\b/.test(codeOnly(path)))
       .map((path) => path.slice(srcDir.length + 1));
 
     expect(offenders).toEqual([]);
@@ -66,7 +79,7 @@ describe('determinism seams', () => {
   it('keeps performance.now out of everything but time.ts', () => {
     const offenders = sourceFiles(srcDir)
       .filter((path) => !path.endsWith('time.ts'))
-      .filter((path) => /\bperformance\./.test(readFileSync(path, 'utf8')))
+      .filter((path) => /\bperformance\./.test(codeOnly(path)))
       .map((path) => path.slice(srcDir.length + 1));
 
     expect(offenders).toEqual([]);
@@ -74,7 +87,7 @@ describe('determinism seams', () => {
 
   it('writes nothing to the console from library code', () => {
     const offenders = sourceFiles(srcDir)
-      .filter((path) => /\bconsole\.\w+\(/.test(readFileSync(path, 'utf8')))
+      .filter((path) => /\bconsole\.\w+\(/.test(codeOnly(path)))
       .map((path) => path.slice(srcDir.length + 1));
 
     // A library that logs is a library you cannot silence. Telemetry goes
@@ -113,7 +126,7 @@ describe('admission atomicity (S4)', () => {
 
   it('keeps the modules admit.ts depends on synchronous too', () => {
     // An await reached indirectly is just as damaging as one written here.
-    for (const module of ['bucket.ts', 'semaphore.ts', 'queue.ts']) {
+    for (const module of ['bucket.ts', 'semaphore.ts', 'queue.ts', 'retry.ts']) {
       const source = readFileSync(join(srcDir, module), 'utf8');
       const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
       expect(code, `${module} must stay synchronous`).not.toMatch(/\bawait\b|\basync\b/);

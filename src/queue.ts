@@ -32,6 +32,34 @@ export class BoundedFifo<T> {
     return this.items.shift();
   }
 
+  /**
+   * Removes a specific item, wherever it sits. Returns `false` when it was not
+   * queued — which is the signal a caller needs to know that something else
+   * (admission, usually) got there first.
+   *
+   * Needed so a call can settle on its own deadline while waiting, instead of
+   * holding its caller until admission happens to come round.
+   */
+  remove(item: T): boolean {
+    const index = this.items.indexOf(item);
+    if (index === -1) return false;
+    this.items.splice(index, 1);
+    return true;
+  }
+
+  /**
+   * Adds to the back, ignoring the depth bound.
+   *
+   * For retries only. `maxDepth` exists to bound NEW intake; a retrying call
+   * was already accepted, already spent provider capacity, and was promised a
+   * number of attempts. Dropping it here would turn a transient provider
+   * failure into a hard one. The queue can therefore exceed its bound by the
+   * number of retrying calls — documented, and visible through `stats()`.
+   */
+  requeue(item: T): void {
+    this.items.push(item);
+  }
+
   get size(): number {
     return this.items.length;
   }

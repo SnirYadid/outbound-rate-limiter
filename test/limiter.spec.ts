@@ -130,7 +130,7 @@ describe('createLimiter — basic execution', () => {
 
   it('tells the task which key it ran under and how long it waited', async () => {
     const {clock, limiter} = build(paced);
-    const seen: {key: string; elapsedMs: number}[] = [];
+    const seen: {key: string; attempt: number; elapsedMs: number}[] = [];
     const calls = [
       limiter.run((ctx) => void seen.push({...ctx}), {key: 'acct'}),
       limiter.run((ctx) => void seen.push({...ctx}), {key: 'acct'}),
@@ -138,7 +138,8 @@ describe('createLimiter — basic execution', () => {
 
     await settleAll(clock, calls);
 
-    expect(seen[0]).toEqual({key: 'acct', elapsedMs: 0});
+    // `attempt` is 1-based and present from the first try.
+    expect(seen[0]).toEqual({key: 'acct', attempt: 1, elapsedMs: 0});
     // The second waited out the pacing interval.
     expect(seen[1]?.key).toBe('acct');
     expect(seen[1]?.elapsedMs).toBe(100);
@@ -416,7 +417,7 @@ describe('MANDATORY 5 — synchronous task failures', () => {
     await settleAll(clock, calls);
 
     expect(attempts).toBe(25);
-    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0});
+    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0, backingOff: 0});
   });
 
   it('does not overflow the stack when many keys all throw synchronously', async () => {
@@ -496,7 +497,7 @@ describe('MANDATORY 6 — rejected asynchronous tasks', () => {
 
     expect(outcomes).toHaveLength(20);
     expect(outcomes.filter((o) => o === 'err')).toHaveLength(7);
-    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0});
+    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0, backingOff: 0});
   });
 });
 
@@ -621,7 +622,7 @@ describe('MANDATORY 10 — scheduler wake-up behaviour', () => {
     await settleAll(clock, calls);
 
     expect(clock.pendingTimers()).toBe(0);
-    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0});
+    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0, backingOff: 0});
   });
 
   it('wakes a rate-blocked key and a slot-blocked key by their own signals', async () => {
@@ -699,7 +700,7 @@ describe('stats', () => {
     const queuedSameKey = limiter.run(() => 'x', {key: 'a'});
     const queuedOtherKey = limiter.run(() => 'y', {key: 'b'});
 
-    expect(limiter.stats()).toEqual({keys: 2, queued: 2, inflight: 1});
+    expect(limiter.stats()).toEqual({keys: 2, queued: 2, inflight: 1, backingOff: 0});
 
     gate.resolve();
     await settleAll(clock, [running, queuedSameKey, queuedOtherKey]);

@@ -44,7 +44,19 @@ export function pump(partition: Partition, context: SchedulerContext): void {
       const head = partition.queue.peek();
       if (head === undefined) return;
 
-      const outcome = tryAdmit(partition, head.cost, context.clock.now(), context);
+      const now = context.clock.now();
+
+      // Asked before admission, never after: an expired call must not spend
+      // capacity, because capacity is never refunded. Its own deadline timer
+      // normally settles it first; this is the guard for the case where the
+      // pump reaches it at the same instant.
+      if (head.isExpired(now)) {
+        partition.queue.dequeue();
+        head.expire();
+        continue;
+      }
+
+      const outcome = tryAdmit(partition, head.cost, now, context);
 
       if (outcome.admitted) {
         // Dequeue and count the call in BEFORE starting it, so a call that
@@ -75,6 +87,20 @@ export function pump(partition: Partition, context: SchedulerContext): void {
   } finally {
     partition.pumping = false;
   }
+}
+
+/**
+ * Discards a pending rate wake.
+ *
+ * Needed when a call leaves the queue without being admitted (its budget ran
+ * out): the pending timer was computed for that head, and the new head may
+ * need a different wait. Cancelling and letting the next pump recompute is
+ * always correct; keeping it risks sleeping longer than the new head needs.
+ */
+export function cancelWake(partition: Partition): void {
+  if (partition.wakeTimer === undefined) return;
+  partition.wakeTimer();
+  partition.wakeTimer = undefined;
 }
 
 /**

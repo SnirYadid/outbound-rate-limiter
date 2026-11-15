@@ -66,7 +66,13 @@ describe('MANDATORY 8 — safe eviction', () => {
   it('refuses to evict a partition with queued work', () => {
     const {clock, reg} = registry();
     const partition = reg.acquire('k');
-    partition.queue.enqueue({cost: 1, enqueuedAt: 0, start: () => {}});
+    partition.queue.enqueue({
+      cost: 1,
+      enqueuedAt: 0,
+      isExpired: () => false,
+      expire: () => {},
+      start: () => {},
+    });
 
     expect(reg.isDisposable(partition, clock.now())).toBe(false);
   });

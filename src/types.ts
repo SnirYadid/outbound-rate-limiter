@@ -9,6 +9,7 @@
  * nothing here has to move.
  */
 
+import type {RandomFn} from './random.js';
 import type {Clock} from './time.js';
 
 export type IntervalUnit = 'second' | 'minute' | 'hour' | 'day';
@@ -60,15 +61,93 @@ export interface RateConstraint {
   readonly strategy?: 'bucket';
 }
 
-/** What a running call is told about its own execution. */
+/** What a running attempt is told about its own execution. */
 export interface AttemptContext {
   /** The partition key this call was admitted under. */
   readonly key: string;
+  /** 1-based attempt number. `1` on the first try, `2` on the first retry. */
+  readonly attempt: number;
   /**
-   * Milliseconds between entering the queue and starting. In other words, how
-   * long this call waited for capacity.
+   * Milliseconds since `run()` was called — queue waits, attempts and backoffs
+   * all included. The same clock the total budget is measured against.
    */
   readonly elapsedMs: number;
+}
+
+/** What the retry classifier is told about the failure it is judging. */
+export interface ClassifyContext {
+  /** 1-based number of the attempt that just failed. */
+  readonly attempt: number;
+  /** Milliseconds since `run()` was called. */
+  readonly elapsedMs: number;
+  /**
+   * True when QuotaPilot aborted this attempt on `attemptTimeoutMs`.
+   *
+   * Whether the remote operation completed is UNKNOWN in that case, so a
+   * classifier should decline unless the operation is idempotent. Only ever
+   * `true` when `retryOnAttemptTimeout` was enabled.
+   */
+  readonly timedOut: boolean;
+}
+
+/**
+ * The classifier's answer.
+ *
+ * `afterMs` is a wait the PROVIDER named (a `Retry-After` header, a throttle
+ * hint in a response body). It is used verbatim: not jittered, and not clamped
+ * by `maxDelayMs`. Only the total budget can override it, and then the call is
+ * refused rather than sleeping past its deadline.
+ */
+export type Verdict =
+  | {readonly retry: true; readonly afterMs?: number}
+  | {readonly retry: false};
+
+export interface RetryPolicy {
+  /**
+   * Total attempts, including the first. `1` means no retries.
+   */
+  readonly maxAttempts: number;
+
+  /**
+   * Decides whether an error is worth retrying. **Required.**
+   *
+   * QuotaPilot ships no default and never will: `429` is a transient throttle
+   * at one provider, an exhausted hourly budget at the next, and a permanent
+   * entitlement problem at a third. Only you know which.
+   *
+   * A classifier that throws is treated as "do not retry", and the error your
+   * operation actually produced is what surfaces — a bug in the classifier
+   * cannot invent a different outcome for the call.
+   */
+  readonly classify: (error: unknown, context: ClassifyContext) => Verdict;
+
+  /** First retry's delay before jitter, in milliseconds. Defaults to 500. */
+  readonly baseDelayMs?: number;
+
+  /**
+   * Ceiling on the COMPUTED delay, in milliseconds. Defaults to 30,000.
+   * Never applied to a provider's own `afterMs` hint.
+   */
+  readonly maxDelayMs?: number;
+
+  /**
+   * `'full'` (default) draws the delay uniformly from `[0, computed)`.
+   * `'none'` uses the computed delay exactly.
+   *
+   * Full jitter by default because synchronised retries across many callers
+   * are how a recovering provider gets knocked over a second time.
+   */
+  readonly jitter?: 'full' | 'none';
+
+  /**
+   * Whether to retry an attempt QuotaPilot abandoned on `attemptTimeoutMs`.
+   * Defaults to **false**.
+   *
+   * A timeout is not proof of failure: the server may have completed the work.
+   * Retrying by default would make this library silently unsafe for anything
+   * non-idempotent. Enable it only for operations you can safely repeat.
+   */
+  readonly retryOnAttemptTimeout?: boolean;
 }
 
 export interface RunOptions {
@@ -105,6 +184,33 @@ export interface RunOptions {
    * more expensive queued call is not.
    */
   readonly onSaturated?: 'wait' | 'reject';
+
+  /**
+   * Retry policy. Absent means exactly one attempt — `fn` runs once and any
+   * error propagates unchanged.
+   */
+  readonly retry?: RetryPolicy;
+
+  /**
+   * Abandon one attempt after this many milliseconds.
+   *
+   * The `AbortSignal` story arrives with cancellation; today the attempt's
+   * promise is simply abandoned, so make sure your work is safe to leave
+   * running. Whether it completed is unknown, which is why
+   * `retryOnAttemptTimeout` defaults to false.
+   */
+  readonly attemptTimeoutMs?: number;
+
+  /**
+   * Ceiling on the whole call: queue waits, every attempt and every backoff.
+   * Measured from `run()`.
+   *
+   * It does NOT interrupt an attempt already in flight — use
+   * `attemptTimeoutMs` for that — so worst-case wall time is
+   * `totalBudgetMs + attemptTimeoutMs`. A call still queued when its budget
+   * runs out settles then and there, without waiting for admission.
+   */
+  readonly totalBudgetMs?: number;
 }
 
 /**
@@ -169,8 +275,15 @@ export interface LimiterStats {
   readonly keys: number;
   /** Calls waiting for capacity, across all keys. */
   readonly queued: number;
-  /** Calls started and not yet settled, across all keys. */
+  /** Attempts started and not yet settled, across all keys. */
   readonly inflight: number;
+  /**
+   * Calls sleeping between attempts, across all keys.
+   *
+   * These hold no queue entry and no concurrency slot, so without this figure
+   * the counters would not add up to the work actually outstanding.
+   */
+  readonly backingOff: number;
 }
 
 export interface LimiterOptions {
@@ -225,6 +338,14 @@ export interface LimiterOptions {
    * so with an injected one no test ever has to sleep.
    */
   readonly clock?: Clock;
+
+  /**
+   * Source of randomness for retry jitter. Defaults to `Math.random`.
+   *
+   * The only non-determinism in the library. Inject `createSeededRandom(seed)`
+   * to make backoff reproducible in tests.
+   */
+  readonly random?: RandomFn;
 }
 
 export interface Limiter {

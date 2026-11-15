@@ -20,9 +20,12 @@ import {
   QuotaPilotQueueFullError,
   QuotaPilotSaturatedError,
 } from './errors.js';
+import {createCall} from './call.js';
 import {inspectKey, type InspectContext} from './inspect.js';
 import {createPartitionRegistry, type Partition, type QueuedCall} from './partition.js';
-import {pump, type SchedulerContext} from './scheduler.js';
+import {defaultRandom} from './random.js';
+import {normalizeRetryPolicy} from './retry.js';
+import {cancelWake, pump, type SchedulerContext} from './scheduler.js';
 import {createSemaphore} from './semaphore.js';
 import {realClock} from './time.js';
 import type {
@@ -60,6 +63,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
   );
   const maxKeys = countOption(options.maxKeys, DEFAULT_MAX_KEYS, 'maxKeys');
   const clock = options.clock ?? realClock;
+  const random = options.random ?? defaultRandom;
 
   // Default: the longest time any constraint needs to refill from empty. That
   // is the soonest a drained partition could become disposable, so sweeping
@@ -133,6 +137,15 @@ export function createLimiter(options: LimiterOptions): Limiter {
         );
       }
 
+      // Validated BEFORE the promise exists, so a configuration mistake throws
+      // at the call site like every other one. Inside the executor it would
+      // become a rejection, and a library that mixes the two for the same
+      // class of mistake is one you cannot reason about.
+      const retry =
+        runOptions?.retry === undefined ? undefined : normalizeRetryPolicy(runOptions.retry);
+      const attemptTimeoutMs = optionalMs(runOptions?.attemptTimeoutMs, 'attemptTimeoutMs');
+      const totalBudgetMs = optionalMs(runOptions?.totalBudgetMs, 'totalBudgetMs');
+
       return new Promise<T>((resolve, reject) => {
         // `acquire` throws when the registry is full and nothing is safe to
         // evict. Converted to a rejection because by this point the caller
@@ -146,54 +159,29 @@ export function createLimiter(options: LimiterOptions): Limiter {
           return;
         }
 
-        const enqueuedAt = clock.now();
-
-        const call: QueuedCall = {
-          cost,
-          enqueuedAt,
-          start: (release) => {
-            let settled = false;
-            // One exit path for every outcome, so the slot is released exactly
-            // once and the in-flight count cannot drift.
-            const finish = (): void => {
-              // Unreachable today — `finish` has exactly one caller per
-              // outcome, and a promise settles once. Kept because Day 5 adds a
-              // second path (an abort firing while the task is still in
-              // flight), and a double release would inflate concurrency.
-              /* c8 ignore next */
-              if (settled) return;
-              settled = true;
-              partition.inflight--;
-              // Per-key capacity first, then the global slot: releasing the
-              // slot can synchronously hand it to another key's pump, and that
-              // pump should see this key's count already decremented.
-              release();
-              pump(partition, context);
-            };
-
-            let result: T | Promise<T>;
-            try {
-              result = fn({key, elapsedMs: clock.now() - enqueuedAt});
-            } catch (error) {
-              // A synchronous throw still consumed capacity and a slot. Both
-              // are accounted for here; capacity is never refunded.
-              finish();
-              reject(error);
-              return;
-            }
-
-            Promise.resolve(result).then(
-              (value) => {
-                finish();
-                resolve(value);
-              },
-              (error: unknown) => {
-                finish();
-                reject(error);
-              }
-            );
+        const {call, armDeadline} = createCall<T>(
+          {
+            key,
+            cost,
+            fn,
+            retry,
+            attemptTimeoutMs,
+            totalBudgetMs,
+            resolve,
+            reject,
           },
-        };
+          {
+            clock,
+            random,
+            partition,
+            repump: () => {
+              pump(partition, context);
+            },
+            cancelWake: () => {
+              cancelWake(partition);
+            },
+          }
+        );
 
         if (onSaturated === 'reject') {
           rejectOrStart(partition, call, key, reject);
@@ -212,6 +200,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
           return;
         }
 
+        armDeadline();
         pump(partition, context);
       });
     },
@@ -220,6 +209,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
       keys: registry.size,
       queued: registry.totalQueued(),
       inflight: registry.totalInflight(),
+      backingOff: registry.totalBackingOff(),
     }),
 
     inspect: (key = ''): KeySnapshot => {
@@ -288,6 +278,17 @@ function countOption(value: number | undefined, fallback: number, label: string)
   if (value !== Infinity && !Number.isInteger(value)) {
     throw new QuotaPilotConfigError(
       `${label} must be a whole number, received ${JSON.stringify(value)}.`
+    );
+  }
+  return value;
+}
+
+/** An optional positive-millisecond option. */
+function optionalMs(value: number | undefined, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new QuotaPilotConfigError(
+      `run() ${label} must be a finite number greater than 0, received ${JSON.stringify(value)}.`
     );
   }
   return value;

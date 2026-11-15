@@ -277,6 +277,19 @@ QuotaPilotError) }` reads as "the limiter refused", never "the request failed".
   at the next and a permanent entitlement problem at a third. Guessing is worse
   than asking.
 
+### What a retry does, mechanically
+
+| | Guarantee |
+|---|---|
+| **R1** | Every retry re-enters the **tail** of its key's FIFO queue, so a hot retry loop cannot starve fresh work. |
+| **R2** | Every attempt reacquires a concurrency slot and passes through normal rate admission. |
+| **R3** | Weighted capacity is charged **per attempt**, at the moment the attempt starts. A retry pays again. |
+| **R4** | An attempt counts toward `maxAttempts` only when it actually **starts**. A call re-queued and then refused for budget never used an attempt. |
+| **R5** | A backoff holds **neither** a concurrency slot **nor** a queue entry. It is counted in `stats().backingOff`, and its partition cannot be evicted while it sleeps. |
+| **R6** | A concurrency slot is released exactly once per attempt, including when a timeout and a late completion race. |
+| **R7** | The caller's promise settles at most once. A straggler from a timed-out attempt can never override a later attempt's result. |
+| **R8** | A retry may exceed `maxQueueDepth`: that bound governs new intake, not work already accepted. |
+
 ### Other retry semantics
 
 - **Every attempt consumes capacity.** A retry is an outbound request; it pays.
@@ -292,6 +305,20 @@ QuotaPilotError) }` reads as "the limiter refused", never "the request failed".
 - **`totalBudgetMs` runs from `run()` entry** and includes queue time. It does
   not interrupt an attempt already in flight, so worst-case wall time is
   `totalBudgetMs + attemptTimeoutMs`.
+- **A queued call reaches its own deadline** without waiting for admission. It
+  is checked at two points — before scheduling a backoff, and before an attempt
+  starts — and a queued call additionally arms a timer for its remaining
+  budget, so a long rate wait cannot hold a caller past the budget it asked
+  for.
+- **A classifier that throws** means "do not retry", and the error your
+  operation actually produced is what surfaces. A bug in the classifier cannot
+  invent a different outcome for the call.
+- **A malformed `afterMs`** (negative, `NaN`, `Infinity`, not a number) is
+  ignored and the computed backoff is used instead. `0` is honoured as "retry
+  immediately".
+- **`onSaturated` governs the first admission only.** Once a call has started,
+  its retries queue normally — a caller who configured a retry policy opted
+  into that policy's delays.
 
 ---
 

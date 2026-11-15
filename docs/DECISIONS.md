@@ -421,3 +421,118 @@ Two findings came out of writing those tests, and both were left as they are:
 Also pinned because it reads like a bug and is not one: `10 + Number.EPSILON`
 **is** exactly `10` as a double — the spacing between representable values near
 10 is about 1.8e-15, roughly eight times `EPSILON` — so that cost is admitted.
+
+---
+
+# Day 4 decisions
+
+## D35 — `backingOff` is the third protection, and the ordering matters
+
+A call sleeping between attempts holds no queue entry and no concurrency slot,
+so without a dedicated counter it satisfies every eviction condition. The
+consequence is worse than free capacity: the retry re-enters an **orphaned**
+partition while a fresh call mints a new, full one, so two partitions enforce
+one key's limit independently and the effective limit silently doubles — only
+for keys that retried.
+
+Hence `Partition.backingOff`, one clause in `isDisposable`, and one field on
+`LimiterStats` so the counters still add up to the work outstanding.
+
+The ordering in `scheduleRetry` is load-bearing: the counter is claimed
+**before** the sleep, and on wake the call is **re-queued before** the counter
+is dropped. Reversing those two lines reopens the window the counter exists to
+close. Proved by a test that reproduces the pre-fix predicate state, and by a
+property test asserting conservation survives random retry schedules under
+aggressive sweeping.
+
+## D36 — Settlement is tracked at two levels, because they answer two questions
+
+Per **attempt** (`attemptDone`, via `claimAttempt`): who owns this attempt's
+outcome. That is what releases the concurrency slot exactly once when a timeout
+and a late resolution race.
+
+Per **call** (`settled`): whether the caller's promise has been answered. That
+is what stops a straggler from a timed-out attempt overriding a later attempt's
+result.
+
+Day 2's `settled` flag lived inside the attempt closure, which was correct when
+there was one attempt per call and silently wrong the moment there were two.
+Moving it out was the smallest change that fixed it.
+
+## D37 — A queued call needs its own deadline timer
+
+Checking the budget only at admission is not enough. A call behind a long rate
+wait would hold its caller well past the budget it asked for, so a queued call
+arms a timer for its remaining budget and settles itself when it fires.
+
+Two mechanisms, not one, and both are needed:
+
+- the **timer** makes the refusal prompt, without waiting for admission;
+- the pump's **`isExpired` check** makes it impossible for an expired call to
+  spend capacity, which matters because capacity is never refunded.
+
+The timer normally wins, so the pump's guard looks redundant — until a rate
+wake is already pending and due at the same instant, having been scheduled
+earlier. Then the pump runs first and must refuse the admission itself. There
+is a test that constructs exactly that race.
+
+The deadline is stood down while an attempt runs (the budget never interrupts
+an attempt in flight) and re-armed if the call comes back for another go.
+
+## D38 — A retry bypasses `maxQueueDepth`
+
+`maxQueueDepth` bounds **new intake**. A retrying call was already accepted,
+already spent provider capacity, and was promised a number of attempts;
+dropping it at the queue door would turn a transient provider failure into a
+hard one.
+
+So `BoundedFifo.requeue` appends past the bound. The queue can therefore exceed
+`maxQueueDepth` by the number of retrying calls — documented, and visible
+through `stats().backingOff`. Total memory stays bounded by the caller's own
+concurrency, since every call in the system corresponds to a promise some
+caller is holding.
+
+## D39 — `onSaturated` governs the first admission only
+
+Once a call has been admitted and has started, its retries follow the normal
+queueing path. `'reject'` means "do not make me wait to **start**"; a caller
+who then configures a retry policy has explicitly opted into that policy's
+delays, which are waits by definition.
+
+Mixing the two would mean a retry could fail with `QuotaPilotSaturatedError`
+instead of retrying, which conflates two different refusal concepts.
+
+## D40 — A throwing classifier means "do not retry", and the real error survives
+
+A classifier that throws is a bug in the caller's code. It must not be able to
+invent a different outcome for the call, so the error the operation actually
+produced is what surfaces, and no retry happens.
+
+The alternative — surfacing the classifier's own error — was rejected because
+it discards the information the caller actually needs.
+
+## D41 — A malformed provider hint is ignored, not trusted
+
+`afterMs` that is negative, `NaN`, `Infinity` or not a number falls back to the
+computed backoff. A parsing bug in a classifier should degrade to ordinary
+backoff, not schedule a timer for `NaN` milliseconds.
+
+A hint of exactly `0` is honoured as "retry immediately" — that is a legitimate
+thing for a provider to say.
+
+## D42 — Retry options are validated before the promise exists
+
+`normalizeRetryPolicy`, `attemptTimeoutMs` and `totalBudgetMs` are checked
+**outside** the `new Promise` executor, so a configuration mistake throws at the
+call site like every other one in the library.
+
+This was a bug in the first draft: validating inside the executor turned those
+throws into rejections, so the same class of mistake surfaced two different
+ways depending on which option was wrong. The validation tests caught it.
+
+## D43 — Hygiene scanners judge code, not prose
+
+The determinism scanners now strip comments before matching, as the atomicity
+scanner always has. A doc comment naming `Math.random` to say what an option
+defaults to is documentation; a call to it is a violation. Flagging the former
+was a false positive that would have pushed the docs toward being less clear.

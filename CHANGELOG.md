@@ -115,3 +115,42 @@ real boundary rather than `burst + TOKEN_EPSILON`.
 
 Retries, per-attempt timeouts, cancellation, telemetry events, `drain()`.
 See `docs/DAY4-PLAN.md`.
+
+## 0.1.0-alpha.3 — unreleased
+
+Day 4 (M4): the retry engine.
+
+### Added
+
+- **`RunOptions.retry`** (`RetryPolicy`): `maxAttempts`, a required `classify`,
+  `baseDelayMs`, `maxDelayMs`, `jitter` (`'full'` default), and
+  `retryOnAttemptTimeout` (default **false**).
+- **`RunOptions.attemptTimeoutMs`** — abandons one attempt. Its own error class
+  with no `cause`, because the outcome is unknown rather than failed.
+- **`RunOptions.totalBudgetMs`** — ceiling on the whole call. Checked before
+  scheduling a backoff and before an attempt starts, and a queued call arms a
+  timer so it settles on time without waiting for admission.
+- **`LimiterOptions.random`** for reproducible jitter.
+- **`AttemptContext.attempt`** (1-based) and public `ClassifyContext`,
+  `Verdict`, `RetryPolicy` types.
+- **`LimiterStats.backingOff`** — calls sleeping between attempts, which hold
+  no queue entry and no slot.
+- `Partition.backingOff` with a matching clause in the eviction predicate:
+  a sleeping retry can no longer have its partition evicted underneath it.
+- `BoundedFifo.remove` (a call settling on its own deadline) and `requeue`
+  (a retry appending past the depth bound).
+- New modules: `src/retry.ts` (pure policy validation and backoff arithmetic)
+  and `src/call.ts` (one logical call across its attempts).
+
+### Changed
+
+- `LimiterStats` gained `backingOff`; `AttemptContext` gained `attempt`. Both
+  additive, both breaking for an exact `toEqual` on those shapes.
+- `QueuedCall` (internal) gained `isExpired` and `expire`, and `start` may now
+  be called once per attempt rather than once per call.
+- Hygiene scanners strip comments before matching, so documentation naming
+  `Math.random` is no longer a false positive.
+
+### Not yet implemented
+
+Cancellation (`AbortSignal`), telemetry events, `drain()`.

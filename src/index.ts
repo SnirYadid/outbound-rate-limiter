@@ -14,11 +14,12 @@
  * and your real ceiling is N times what you configured.
  */
 
-export const VERSION = '0.1.0-alpha.2';
+export const VERSION = '0.1.0-alpha.3';
 
 export {createLimiter} from './limiter.js';
 export type {
   AttemptContext,
+  ClassifyContext,
   ConstraintSnapshot,
   IntervalUnit,
   KeySnapshot,
@@ -26,8 +27,10 @@ export type {
   LimiterOptions,
   LimiterStats,
   RateConstraint,
+  RetryPolicy,
   RunOptions,
   SaturationKind,
+  Verdict,
 } from './types.js';
 
 export type {CancelTimer, Clock} from './time.js';

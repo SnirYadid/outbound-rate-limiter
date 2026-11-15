@@ -22,14 +22,27 @@ import type {CancelTimer, Clock} from './time.js';
 export interface QueuedCall {
   /** Units this call will consume from every constraint. */
   readonly cost: number;
-  /** Clock reading when the call entered the queue. */
+  /** Clock reading when the call first entered the queue. */
   readonly enqueuedAt: number;
   /**
-   * Starts the work and takes ownership of `release`.
+   * True when the call's total budget has run out.
+   *
+   * Asked by the pump BEFORE admission, so an expired call can never spend
+   * capacity — which matters because capacity is never refunded.
+   */
+  readonly isExpired: (now: number) => boolean;
+  /**
+   * Called by the pump when `isExpired` returned true, after dequeueing. Must
+   * settle the call and must not throw.
+   */
+  readonly expire: () => void;
+  /**
+   * Starts one attempt and takes ownership of `release`.
    *
    * MUST NOT throw: it is invoked from inside the pump loop, where a throw
    * would abandon the queue and leak the slot. The implementation catches
-   * everything the caller's function can do.
+   * everything the caller's function can do. May be called more than once over
+   * a call's life — once per attempt.
    */
   readonly start: (release: () => void) => void;
 }
@@ -39,8 +52,16 @@ export interface Partition {
   /** Index-aligned with the limiter's normalized constraints. */
   readonly buckets: BucketState[];
   readonly queue: BoundedFifo<QueuedCall>;
-  /** Calls started and not yet settled. */
+  /** Attempts started and not yet settled. */
   inflight: number;
+  /**
+   * Calls sleeping between attempts.
+   *
+   * A backing-off call holds no queue entry and no concurrency slot, so this
+   * counter is the ONLY thing keeping its partition from being evicted
+   * underneath it. See the state table in call.ts.
+   */
+  backingOff: number;
   /** True while the pump loop is running, to prevent re-entry. */
   pumping: boolean;
   /** Set when the pump is sleeping until rate capacity returns. */
@@ -72,6 +93,7 @@ export interface PartitionRegistry {
   readonly size: number;
   totalQueued(): number;
   totalInflight(): number;
+  totalBackingOff(): number;
 }
 
 export function createPartitionRegistry(
@@ -86,6 +108,11 @@ export function createPartitionRegistry(
     // cheapest; the capacity test below is the subtle one.
     if (!partition.queue.isEmpty) return false;
     if (partition.inflight > 0) return false;
+    // Without this, a call sleeping between attempts would be invisible: no
+    // queue entry, no slot, so the partition would look idle and be evicted —
+    // and the retry would then re-enter an orphaned partition while a fresh
+    // call minted a new, full one, silently doubling the key's limit.
+    if (partition.backingOff > 0) return false;
     if (partition.wakeTimer !== undefined) return false;
 
     // P2: a bucket at capacity carries no information, because a partition is
@@ -142,6 +169,7 @@ export function createPartitionRegistry(
         buckets: constraints.map((constraint) => createBucket(now, constraint.spec)),
         queue: new BoundedFifo<QueuedCall>(maxQueueDepth),
         inflight: 0,
+        backingOff: 0,
         pumping: false,
         wakeTimer: undefined,
       };
@@ -169,6 +197,11 @@ export function createPartitionRegistry(
     totalInflight: () => {
       let total = 0;
       for (const partition of partitions.values()) total += partition.inflight;
+      return total;
+    },
+    totalBackingOff: () => {
+      let total = 0;
+      for (const partition of partitions.values()) total += partition.backingOff;
       return total;
     },
   };

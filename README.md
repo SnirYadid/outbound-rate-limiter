@@ -20,13 +20,14 @@ npm install quota-pilot
 
 **Available now:** multi-constraint weighted token buckets, per-key
 partitioning with provably safe eviction, global and per-key concurrency caps,
-bounded per-key FIFO queues with documented cross-key fairness, and the full
-error taxonomy.
+bounded per-key FIFO queues with documented cross-key fairness, classified
+retries with backoff and provider wait hints, per-attempt timeouts, total
+budgets, and the full error taxonomy.
 
-**Not here yet:** retries and backoff, per-attempt timeouts, cancellation via
-`AbortSignal`, telemetry events, and `drain()`. Each is an additive change to
-the surface below — types describing unbuilt behaviour are deliberately *not*
-exported, because a published type is a promise.
+**Not here yet:** cancellation via `AbortSignal`, telemetry events, and
+`drain()`. Each is an additive change to the surface below — types describing
+unbuilt behaviour are deliberately *not* exported, because a published type is
+a promise.
 
 ```ts
 import {createLimiter, QuotaPilotSaturatedError} from 'quota-pilot';
@@ -61,6 +62,33 @@ try {
   }
 }
 ```
+
+Retries are classified by you, never guessed:
+
+```ts
+await limiter.run(() => fetchPage(url), {
+  key: credentialId,
+  attemptTimeoutMs: 20_000,
+  totalBudgetMs: 120_000,
+  retry: {
+    maxAttempts: 4,
+    classify(error, {timedOut}) {
+      if (timedOut) return {retry: false};            // may have succeeded
+      const status = (error as {status?: number}).status;
+      if (status === 429) {
+        const after = retryAfterMs(error);            // your parsing, your rules
+        return after === null ? {retry: true} : {retry: true, afterMs: after};
+      }
+      return {retry: status !== undefined && status >= 500};
+    },
+  },
+});
+```
+
+A provider's own `afterMs` is used verbatim — never jittered, never shortened
+by `maxDelayMs`. Only the total budget can override it, and then the call is
+refused rather than sleeping past its deadline. On ordinary exhaustion **your**
+error surfaces unchanged, so `instanceof` and `.status` checks keep working.
 
 And read capacity without spending any:
 

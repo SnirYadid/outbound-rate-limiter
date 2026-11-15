@@ -62,6 +62,7 @@ import {
   QuotaPilotError,
   QuotaPilotQueueFullError,
   QuotaPilotSaturatedError,
+  QuotaPilotTimeoutError,
   createLimiter,
   createSeededRandom,
   realClock,
@@ -93,7 +94,11 @@ const results = await Promise.all(
 );
 assert.deepEqual(results, [0, 2, 4], 'all three calls resolved in order');
 assert.deepEqual(started, ['acct', 'acct', 'acct'], 'context carried the key');
-assert.deepEqual(limiter.stats(), {keys: 1, queued: 0, inflight: 0}, 'drained cleanly');
+assert.deepEqual(
+  limiter.stats(),
+  {keys: 1, queued: 0, inflight: 0, backingOff: 0},
+  'drained cleanly'
+);
 
 // A cost no constraint can admit fails synchronously, not as a rejection.
 assert.throws(() => limiter.run(() => 1, {cost: 99}), QuotaPilotConfigError);
@@ -152,6 +157,48 @@ after.forEach((entry, index) => {
   assert.ok(entry.available <= entry.capacity, 'capacity cannot exceed its ceiling');
 });
 
+// Retries, on a real clock, with a provider hint honoured verbatim.
+const retrying = createLimiter({constraints: [{name: 'r', limit: 500, interval: 'second'}]});
+let tries = 0;
+const retried = await retrying.run(
+  (ctx) => {
+    tries = ctx.attempt;
+    if (ctx.attempt < 3) throw new Error('transient');
+    return 'succeeded on ' + ctx.attempt;
+  },
+  {
+    key: 'acct',
+    retry: {
+      maxAttempts: 5,
+      jitter: 'none',
+      baseDelayMs: 5,
+      maxDelayMs: 5,
+      classify: (error) => ({retry: error instanceof Error && error.message === 'transient'}),
+    },
+  }
+);
+assert.equal(retried, 'succeeded on 3');
+assert.equal(tries, 3);
+assert.deepEqual(retrying.stats(), {keys: 1, queued: 0, inflight: 0, backingOff: 0});
+
+// Exhaustion surfaces the CALLER's error, not a wrapper.
+const permanent = new Error('permanent');
+const surfaced = await retrying
+  .run(() => { throw permanent; }, {
+    key: 'acct',
+    retry: {maxAttempts: 2, baseDelayMs: 5, maxDelayMs: 5, classify: () => ({retry: true})},
+  })
+  .then(() => null, (error) => error);
+assert.equal(surfaced, permanent, 'the original error object must survive');
+
+// A per-attempt timeout is its own error class, with no cause.
+const timedOut = await retrying
+  .run(() => new Promise(() => {}), {key: 'acct', attemptTimeoutMs: 20})
+  .then(() => null, (error) => error);
+assert.ok(timedOut instanceof QuotaPilotTimeoutError, 'expected a timeout error');
+assert.equal(timedOut.timeoutMs, 20);
+assert.equal('cause' in timedOut, false, 'a timeout produced no error to carry');
+
 console.log('esm ok, version', VERSION);
 `
   );
@@ -200,6 +247,19 @@ assert.equal(createSeededRandom(2)(), createSeededRandom(2)());
   assert.equal(limiter.inspect('unseen').tracked, false);
   assert.equal(await limiter.run(() => 'now', {key: 'k', onSaturated: 'reject'}), 'now');
 
+  let tries = 0;
+  const retried = await limiter.run(
+    (ctx) => {
+      tries = ctx.attempt;
+      if (ctx.attempt < 2) throw new Error('transient');
+      return 'retried';
+    },
+    {key: 'k', retry: {maxAttempts: 3, baseDelayMs: 5, maxDelayMs: 5, classify: () => ({retry: true})}}
+  );
+  assert.equal(retried, 'retried');
+  assert.equal(tries, 2);
+  assert.equal(limiter.stats().backingOff, 0);
+
   console.log('cjs ok, version', VERSION);
 })().catch((error) => {
   console.error(error);
@@ -217,13 +277,16 @@ assert.equal(createSeededRandom(2)(), createSeededRandom(2)());
     `import {createLimiter, QuotaPilotConfigError, VERSION} from 'quota-pilot';
 import type {
   AttemptContext,
+  ClassifyContext,
   ConstraintSnapshot,
   KeySnapshot,
   Limiter,
   LimiterOptions,
   RateConstraint,
+  RetryPolicy,
   RunOptions,
   SaturationKind,
+  Verdict,
 } from 'quota-pilot';
 
 const constraint: RateConstraint = {name: 'per-second', limit: 10, interval: 'second'};
@@ -236,9 +299,28 @@ const strictOptions: RunOptions = {key: 'acct', onSaturated: 'reject'};
 const snapshot: KeySnapshot = limiter.inspect('acct');
 const first: ConstraintSnapshot | undefined = snapshot.constraints[0];
 const kinds: SaturationKind[] = ['rate', 'concurrency', 'key-concurrency', 'queued-ahead'];
+const policy: RetryPolicy = {
+  maxAttempts: 3,
+  classify: (error: unknown, context: ClassifyContext): Verdict =>
+    context.timedOut || error === null ? {retry: false} : {retry: true, afterMs: 250},
+};
+const retried: Promise<string> = limiter.run(() => 'x', {key: 'acct', retry: policy});
 const version: string = VERSION;
 const error: Error = new QuotaPilotConfigError('nope');
-export {constraint, limiter, pending, warnings, strictOptions, snapshot, first, kinds, version, error};
+export {
+  constraint,
+  limiter,
+  pending,
+  warnings,
+  strictOptions,
+  snapshot,
+  first,
+  kinds,
+  policy,
+  retried,
+  version,
+  error,
+};
 `
   );
   writeFileSync(

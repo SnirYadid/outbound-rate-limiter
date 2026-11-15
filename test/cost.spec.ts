@@ -268,6 +268,6 @@ describe('cost — invalid configuration is caught at construction', () => {
     for (let repeat = 0; repeat < 5; repeat++) {
       expect(() => limiter.run(() => 'x', {cost: 1_000})).toThrow(QuotaPilotConfigError);
     }
-    expect(limiter.stats()).toEqual({keys: 0, queued: 0, inflight: 0});
+    expect(limiter.stats()).toEqual({keys: 0, queued: 0, inflight: 0, backingOff: 0});
   });
 });
