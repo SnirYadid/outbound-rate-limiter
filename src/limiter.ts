@@ -21,6 +21,7 @@ import {
   assertCostAdmissible,
   constraintWarnings,
   normalizeConstraints,
+  type NormalizedConstraint,
 } from './constraints.js';
 import {
   QuotaPilotAbortError,
@@ -33,7 +34,7 @@ import {createEmitter} from './telemetry.js';
 import {inspectKey, type InspectContext} from './inspect.js';
 import {createPartitionRegistry, type Partition, type QueuedCall} from './partition.js';
 import {defaultRandom} from './random.js';
-import {normalizeRetryPolicy} from './retry.js';
+import {normalizeRetryPolicy, type NormalizedRetryPolicy} from './retry.js';
 import {cancelWake, pump, type SchedulerContext} from './scheduler.js';
 import {createSemaphore} from './semaphore.js';
 import {realClock} from './time.js';
@@ -153,44 +154,12 @@ export function createLimiter(options: LimiterOptions): Limiter {
 
   return {
     run<T>(fn: (ctx: AttemptContext) => T | Promise<T>, runOptions?: RunOptions) {
-      if (typeof fn !== 'function') {
-        throw new QuotaPilotConfigError('run() requires a function to execute.');
-      }
-      const key = runOptions?.key ?? '';
-      if (typeof key !== 'string') {
-        throw new QuotaPilotConfigError(
-          `run() key must be a string, received ${JSON.stringify(key)}.`
-        );
-      }
-      const cost = runOptions?.cost ?? 1;
-      // Synchronous on purpose: a cost no constraint could ever admit is a
-      // programming error, and it should fail where it was written rather than
-      // becoming a promise that never settles.
-      assertCostAdmissible(cost, constraints);
-
-      const signal = runOptions?.signal;
-      if (signal !== undefined && typeof signal.addEventListener !== 'function') {
-        throw new QuotaPilotConfigError(
-          'run() signal must be an AbortSignal, or omitted.'
-        );
-      }
-
-      const onSaturated = runOptions?.onSaturated ?? 'wait';
-      if (onSaturated !== 'wait' && onSaturated !== 'reject') {
-        throw new QuotaPilotConfigError(
-          `run() onSaturated must be 'wait' or 'reject', received ` +
-            `${JSON.stringify(onSaturated)}.`
-        );
-      }
-
-      // Validated BEFORE the promise exists, so a configuration mistake throws
-      // at the call site like every other one. Inside the executor it would
-      // become a rejection, and a library that mixes the two for the same
-      // class of mistake is one you cannot reason about.
-      const retry =
-        runOptions?.retry === undefined ? undefined : normalizeRetryPolicy(runOptions.retry);
-      const attemptTimeoutMs = optionalMs(runOptions?.attemptTimeoutMs, 'attemptTimeoutMs');
-      const totalBudgetMs = optionalMs(runOptions?.totalBudgetMs, 'totalBudgetMs');
+      // Everything is validated BEFORE the promise exists, so a configuration
+      // mistake throws at the call site like every other one. Inside the
+      // executor it would become a rejection, and a library that mixes the two
+      // for the same class of mistake is one you cannot reason about.
+      const {key, cost, signal, onSaturated, retry, attemptTimeoutMs, totalBudgetMs} =
+        normalizeRunOptions(fn, runOptions, constraints);
 
       return new Promise<T>((resolve, reject) => {
         // An already-aborted signal is answered before the registry is
@@ -361,6 +330,79 @@ export function createLimiter(options: LimiterOptions): Limiter {
     // counts itself into `inflight`, exactly as it does for the pump.
     call.start(outcome.release);
   }
+}
+
+/** One call's options, validated and defaulted. */
+interface NormalizedRunOptions {
+  readonly key: string;
+  readonly cost: number;
+  readonly signal: AbortSignal | undefined;
+  readonly onSaturated: 'wait' | 'reject';
+  readonly retry: NormalizedRetryPolicy | undefined;
+  readonly attemptTimeoutMs: number | undefined;
+  readonly totalBudgetMs: number | undefined;
+}
+
+/**
+ * Validates and defaults everything `run()` was given.
+ *
+ * Every failure here is a `QuotaPilotConfigError` thrown synchronously, before
+ * the caller holds a promise.
+ *
+ * THE ORDER OF THESE CHECKS IS BEHAVIOUR. When several options are wrong at
+ * once, the first check to fail decides which message the caller reads and
+ * therefore which field they go and fix. A test asserts the whole sequence —
+ * fn, key, cost, signal, onSaturated, retry, attemptTimeoutMs, totalBudgetMs —
+ * by passing a call with every option invalid and peeling them off one at a
+ * time. Rearranging this function without updating that test will fail it,
+ * which is the point.
+ *
+ * The checks are hand-written rather than driven by a schema or a table: there
+ * are eight of them, each with a message that names the field and explains the
+ * constraint, and a generic validator would trade those messages for brevity
+ * nobody reading an error needs.
+ */
+function normalizeRunOptions(
+  fn: unknown,
+  runOptions: RunOptions | undefined,
+  constraints: readonly NormalizedConstraint[]
+): NormalizedRunOptions {
+  if (typeof fn !== 'function') {
+    throw new QuotaPilotConfigError('run() requires a function to execute.');
+  }
+
+  const key = runOptions?.key ?? '';
+  if (typeof key !== 'string') {
+    throw new QuotaPilotConfigError(
+      `run() key must be a string, received ${JSON.stringify(key)}.`
+    );
+  }
+
+  const cost = runOptions?.cost ?? 1;
+  // A cost no constraint could ever admit is a programming error, and it
+  // should fail where it was written rather than becoming a promise that never
+  // settles.
+  assertCostAdmissible(cost, constraints);
+
+  const signal = runOptions?.signal;
+  if (signal !== undefined && typeof signal.addEventListener !== 'function') {
+    throw new QuotaPilotConfigError('run() signal must be an AbortSignal, or omitted.');
+  }
+
+  const onSaturated = runOptions?.onSaturated ?? 'wait';
+  if (onSaturated !== 'wait' && onSaturated !== 'reject') {
+    throw new QuotaPilotConfigError(
+      `run() onSaturated must be 'wait' or 'reject', received ` +
+        `${JSON.stringify(onSaturated)}.`
+    );
+  }
+
+  const retry =
+    runOptions?.retry === undefined ? undefined : normalizeRetryPolicy(runOptions.retry);
+  const attemptTimeoutMs = optionalMs(runOptions?.attemptTimeoutMs, 'attemptTimeoutMs');
+  const totalBudgetMs = optionalMs(runOptions?.totalBudgetMs, 'totalBudgetMs');
+
+  return {key, cost, signal, onSaturated, retry, attemptTimeoutMs, totalBudgetMs};
 }
 
 /** A positive integer, or `Infinity` to mean "no limit". */

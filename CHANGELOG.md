@@ -312,3 +312,57 @@ Same version — nothing had been published, so there was nothing to supersede.
   and a contributing section, and the install command is now
   `npm install quota-pilot@alpha` — a plain install cannot resolve a version
   that only carries the `alpha` tag.
+
+### Targeted refactor (post-review)
+
+An architecture and Clean Code review before publication. No public API change,
+no behaviour change, same version — nothing had been published.
+
+**Documentation (the release-blocking part).** Doc comments on the public
+surface had drifted four times, and two of them shipped in the generated
+`.d.ts`, which is what an editor shows on hover. `Limiter.run()` said "There
+are no retries in this release"; `attemptTimeoutMs` said the `AbortSignal`
+story had not arrived yet. Both features shipped milestones earlier. All four
+sites corrected, plus a `Day 3` reference in `semaphore.ts` that meant nothing
+to an outside reader and a settled open question in `DECISIONS.md`.
+
+Two narrow guards now prevent a recurrence: a test scanning only the doc
+comments of `index.ts` and `types.ts` for phrases that assert a shipped feature
+is absent, and a check in the packaging smoke test over all 34 declaration
+files in the real tarball. The second caught a case the first was too narrow to
+see. Neither scans prose that legitimately describes history.
+
+**One owner for `partition.inflight`.** It was incremented by each admission
+path — the pump and the `onSaturated: 'reject'` bypass — and decremented in
+`call.ts`: one counter, two writers, three files, kept in step by a comment at
+each site. `call.start()` now increments it and `claimAttempt` decrements it,
+fifteen lines apart in the module that owns the attempt. Safe because
+`tryAdmit` reads the counter in the same synchronous turn that `start` writes
+it, so the gap cannot be observed.
+
+**The emitter owns telemetry publication.** Emitting was a four-step protocol
+— gate, build, seal, dispatch — written out at four sites, and `call.ts` did
+the steps in the wrong order: it built the event and only then checked whether
+anyone was listening, so events were constructed and discarded on the hot path
+while the comment claimed otherwise. `emitter.publish(build)` now takes a thunk
+it calls only when a listener exists, and seals the result at its single exit.
+Side effect: `call` and `scheduler` no longer import `telemetry` at all, so the
+dependency graph lost two edges, and `Emitter.active` is gone because nothing
+gates any more.
+
+**`run()` validation extracted.** It had three jobs in 140 lines. The eight
+checks now live in `normalizeRunOptions`, which documents that their ORDER is
+behaviour — when several options are wrong at once, the first failure decides
+which message the caller reads — and is pinned by a test that passes a call
+with every option invalid and peels them off one at a time.
+
+**Tests.** 514, up from 484. The 30 new ones guard the invariants the refactor
+moved: freeze coverage for all six event kinds rather than the three one happy
+path produces, lazy event construction measured differentially with a counting
+clock, validation precedence, `inflight` accounting across both admission paths
+including synchronous throws and re-entrant completion, buffered nested events
+delivered frozen, and the observable ordering of a multi-attempt retry.
+
+Coverage stayed at 100%. Also fixed a latent flake the work surfaced: the
+`07-telemetry` example asserted an exact count of `delayed` events, which
+depends on machine timing because `delayed` reports a wait rather than a call.
