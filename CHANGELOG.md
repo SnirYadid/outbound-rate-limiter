@@ -1,5 +1,11 @@
 # Changelog
 
+`0.1.0-alpha.5` is the **first version published to npm**. The alpha.0 through
+alpha.4 entries below are development history that exists only in git: they
+were each a day's milestone and none of them were ever published. They are kept
+because they record why the design is the way it is, not to suggest anyone
+could have installed them.
+
 ## 0.1.0-alpha.0 — unreleased
 
 Foundation layer. Published shape is the build pipeline and the guarantees, not
@@ -202,7 +208,7 @@ complete for this release line.
 `close()`, lint-enforced module layering, a `fetch` adapter, shared/distributed
 state. See docs/GUARANTEES.md, "Not in this release".
 
-## 0.1.0-alpha.5 — unreleased
+## 0.1.0-alpha.5 — first public release
 
 Day 6 (M6): release hardening. No new features; one real bug fixed, one
 documented limitation retracted as wrong.
@@ -278,3 +284,31 @@ documented limitation retracted as wrong.
   in the order a reader meets it, then the four things to know before adopting
   it (single-process scope, token bucket versus sliding window, observable
   versus physical concurrency, queue depth with retries).
+
+### Release preparation (Day 7)
+
+Same version — nothing had been published, so there was nothing to supersede.
+
+- **Supported Node is now 22, 24 and 26**, and `engines.node` is `>=22`. 18 and
+  20 reached end of life (April 2025 and April 2026), so claiming them meant
+  claiming versions that receive no security patches and that CI should not be
+  running. The library's own API floor is still Node 18; the support contract
+  is deliberately narrower than the code's capability.
+- **Package metadata for a public release**: `repository`, `homepage`, `bugs`,
+  a wider `keywords` list, and `publishConfig` pinning `access: public` and the
+  `alpha` dist-tag. The repository URLs are an explicit `REPLACE_ME_OWNER`
+  placeholder until the GitHub repository exists.
+- **`scripts/preflight.mjs`** (`npm run preflight`) — refuses a release while
+  metadata placeholders remain, when `package.json`, the `VERSION` constant and
+  the built output disagree, when the changelog has no entry for the version,
+  when a prerelease would take the `latest` dist-tag, when a runtime dependency
+  has appeared, or when `engines.node` names a floor the CI matrix does not
+  test. With `--registry` it also refuses a version that is already published.
+- **`.github/workflows/release.yml`** — manual dispatch only, gated on a GitHub
+  Environment, `contents: read` plus `id-token: write` and nothing else, runs
+  the full check set, and stages the publish via npm trusted publishing (OIDC).
+  No npm token exists anywhere in the workflow. Defaults to a dry run.
+- README gained "Why choose it" (including the reasons not to), "Requirements"
+  and a contributing section, and the install command is now
+  `npm install quota-pilot@alpha` — a plain install cannot resolve a version
+  that only carries the `alpha` tag.

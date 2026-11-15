@@ -8,13 +8,23 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+
+    # Read-only. CI builds and tests; it never writes to the repository and
+    # never publishes, so it has no reason to hold a writable token.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
-        # The floor and the current LTS. 18 is the floor because the library
-        # uses AbortController/AbortSignal and Error `cause`, and deliberately
-        # avoids AbortSignal.any, which landed in 20.
-        node: ['18', '20', '22']
+        # Every Node line still receiving security patches, as of this release:
+        # 22 (maintenance LTS, EOL April 2027), 24 (maintenance LTS, EOL April
+        # 2028) and 26 (active LTS, EOL April 2029).
+        #
+        # 18 and 20 are gone, and `engines` moved with them. The library's own
+        # API floor is lower — AbortController, AbortSignal.reason and Error
+        # `cause` are all Node 18 — but a support claim is only honest for
+        # versions that are tested and patched, and 22 is the oldest of those.
+        node: ['22', '24', '26']
 
     steps:
       - uses: actions/checkout@v4

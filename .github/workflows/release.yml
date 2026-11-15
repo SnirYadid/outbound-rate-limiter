@@ -1,0 +1,164 @@
+name: Release
+
+# Manual only. There is no tag trigger and no push trigger on purpose: a
+# release should be something a person asked for, at a moment they chose, not
+# a side effect of merging.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish. Must match package.json exactly.'
+        required: true
+        type: string
+      dry_run:
+        description: 'Run every check and pack the tarball, but do not publish.'
+        required: false
+        type: boolean
+        default: true
+      mode:
+        description: >-
+          stage = submit to the npm staging area for a 2FA approval (preferred).
+          publish = publish straight to the registry; needed for the first OIDC
+          release, because direct publish is what validates a new trusted
+          publisher configuration, and that must happen within 2 days of
+          creating it.
+        required: false
+        type: choice
+        default: stage
+        options:
+          - stage
+          - publish
+
+concurrency:
+  # Two release runs at once can race on the same version. Never cancel the
+  # one already running — it may be mid-publish.
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    # A GitHub Environment is the human gate: configure it with required
+    # reviewers so a dispatch waits for an approval before any publish step
+    # runs. The npm trusted publisher config must name this same environment.
+    environment: release
+
+    permissions:
+      # Least privilege. `id-token: write` is what mints the OIDC token npm
+      # exchanges for a short-lived publish credential; nothing here needs to
+      # write to the repository.
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse to release from anywhere but main
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "This workflow was dispatched from ${GITHUB_REF}, not main."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          # Node 26 is the active LTS. It is also the newest line the test
+          # matrix covers, so the publish runs on a version already proven
+          # green rather than on whatever the runner defaults to.
+          node-version: '26'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: Use an npm that supports trusted publishing and staging
+        # Trusted publishing needs npm >= 11.5.1; staged publishing needs
+        # >= 11.15.0. The npm bundled with a Node release is often older, so
+        # pin it explicitly instead of hoping.
+        run: |
+          npm install -g npm@^11.15.0
+          npm --version
+          node --version
+
+      - run: npm ci
+
+      - name: Requested version must match package.json
+        # The dispatch input exists so the release is deliberate about which
+        # version it is shipping. If it disagrees with the manifest, stop:
+        # one of the two is a mistake and this job cannot tell which.
+        run: |
+          declared=$(node -p "require('./package.json').version")
+          requested="${{ inputs.version }}"
+          echo "package.json: ${declared}"
+          echo "requested:    ${requested}"
+          test "${declared}" = "${requested}"
+
+      - name: Lint and module layering
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Coverage thresholds
+        run: npx vitest run --coverage
+
+      - name: Build
+        run: npm run build
+
+      - name: Consumer packaging smoke (ESM, CJS, TypeScript)
+        run: npm run smoke
+
+      - name: Release preflight
+        # Placeholder metadata, version drift between package.json, the
+        # VERSION constant and the built output, a prerelease about to take
+        # the latest dist-tag, and a version that is already published.
+        run: node scripts/preflight.mjs --registry
+
+      - name: Pack and show what would ship
+        run: |
+          npm pack --dry-run
+          npm pack --pack-destination "${RUNNER_TEMP}"
+
+      - name: Upload the tarball as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quota-pilot-${{ inputs.version }}
+          path: ${{ runner.temp }}/*.tgz
+          if-no-files-found: error
+
+      - name: Stage the publish (dist-tag alpha, provenance via OIDC)
+        if: ${{ inputs.dry_run == false && inputs.mode == 'stage' }}
+        # `npm stage publish` puts the version in a staging area instead of
+        # making it installable. A maintainer then inspects it and runs
+        # `npm stage approve <id>` with 2FA, or `npm stage reject <id>`.
+        #
+        # No NODE_AUTH_TOKEN and no NPM_TOKEN anywhere in this file: the
+        # credential comes from the OIDC token minted by `id-token: write`.
+        # Provenance attestations are generated automatically under trusted
+        # publishing, so `--provenance` is not passed.
+        run: npm stage publish --tag alpha
+
+      - name: Publish directly (dist-tag alpha, provenance via OIDC)
+        if: ${{ inputs.dry_run == false && inputs.mode == 'publish' }}
+        # Immediately installable, no approval step. This exists for the first
+        # OIDC release and for the case where the trusted publisher
+        # configuration does not permit staging.
+        run: npm publish --tag alpha
+
+      - name: What to do next
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          if [ "${{ inputs.mode }}" = "stage" ]; then
+            echo "Staged ${{ inputs.version }} with dist-tag alpha. It is NOT installable yet."
+            echo "  npm stage list"
+            echo "  npm stage view <stage-id>"
+            echo "  npm stage download <stage-id>   # inspect the actual tarball"
+            echo "  npm stage approve <stage-id>    # requires 2FA"
+            echo "  npm stage reject <stage-id>     # discards it"
+          else
+            echo "Published ${{ inputs.version }} with dist-tag alpha. It is live."
+            echo "  npm view quota-pilot@alpha version"
+            echo "  npm install quota-pilot@alpha"
+          fi

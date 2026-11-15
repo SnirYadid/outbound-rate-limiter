@@ -439,8 +439,12 @@ export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCal
     let timeoutTimer: (() => void) | undefined;
 
     // One controller per attempt, aborted by the caller's signal or by this
-    // attempt's timeout. `AbortSignal.any` would express this in one line but
-    // landed in Node 20, and the floor here is 18.
+    // attempt's timeout. `AbortSignal.any` would express the composition in
+    // one line and is available on every supported Node now that the floor is
+    // 22. It is still not used: this code also owns removing the listener and
+    // clearing the timer on settle, so the controller would have to exist
+    // anyway, and swapping working cancellation wiring for a shorter spelling
+    // is not a release-day change.
     const controller = new AbortController();
 
     /**

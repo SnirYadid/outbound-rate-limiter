@@ -5,8 +5,11 @@ weighted token buckets, honest guarantees, deterministic tests, zero runtime
 dependencies.
 
 ```bash
-npm install quota-pilot
+npm install quota-pilot@alpha
 ```
+
+The `@alpha` is required, not optional: this release line is published under
+the `alpha` dist-tag, so a plain `npm install quota-pilot` will not resolve it.
 
 > **QuotaPilot bounds outbound traffic from one Node process.**
 > There is no shared store. If you run N instances, your effective ceiling is
@@ -14,8 +17,11 @@ npm install quota-pilot
 > way and QuotaPilot will warn you if you try. Read
 > [Single-process scope](#single-process-scope) before adopting it.
 
-**Status: 0.1.0-alpha — feature-complete, not yet published.** No new features
-are planned for this release line.
+**Status: 0.1.0-alpha.** The feature set is frozen for this line and no new
+features are planned. It is an alpha because the API has not yet been used by
+anyone outside its own test suite — expect the shape of the options to be
+refined before 0.1.0, and read [the guarantees](docs/GUARANTEES.md) rather than
+assuming the usual ones.
 
 ---
 
@@ -23,6 +29,8 @@ are planned for this release line.
 
 - [What it does](#what-it-does)
 - [The problem it solves](#the-problem-it-solves)
+- [Why choose it](#why-choose-it)
+- [Requirements](#requirements)
 - [Minimal example](#minimal-example)
 - [Declaring constraints](#declaring-constraints)
 - [Several limits at once](#several-limits-at-once)
@@ -90,6 +98,55 @@ problems, in this order:
 
 QuotaPilot addresses 1, 2, 3, 5, 6, 8 and 9 directly; is explicit about 10; and
 deliberately refuses to guess at 4.
+
+## Why choose it
+
+Most rate limiters do one of these things. QuotaPilot's case for existing is
+that the hard part is doing them **together**, under one admission step, with
+the interactions written down.
+
+- **Several limits are checked and debited as one atomic step.** No `await`
+  sits between the capacity check and the commit, so partial consumption is
+  not representable rather than merely tested against. Honouring limits one at
+  a time is how the other one trips.
+- **Weighted costs are first class**, not a loop that calls `acquire()` N
+  times. A call that costs 500 credits waits once, pays once, and is never
+  interleaved with a cheap call halfway through.
+- **The guarantee is stated as a formula, with its failure modes in a table.**
+  `consumed ≤ burst + rate·T`. The README tells you where `burst: 1` stops
+  behaving like a rolling window and what no configuration can fix.
+- **Retries are scheduled, not slept through.** A retry re-enters its key's
+  queue, passes through normal admission and pays again, so a retry storm
+  cannot outrun the limit it is retrying against.
+- **Provider wait hints are obeyed verbatim.** `Retry-After` is not jittered
+  down and not clamped. Most libraries log it and then back off on their own
+  schedule, which throws away the only authoritative number available.
+- **It tells you why.** Six telemetry events naming the binding constraint, the
+  wait, the attempt and the reason — so "why was this slow" is answerable from
+  logs instead of by reasoning about a scheduler.
+- **Deterministic by construction.** Clock and randomness are injected; 484
+  tests run on virtual time with no sleeping, including property tests over the
+  conservation bound. Your own tests can inject a seed and get the same jitter
+  every run.
+- **Zero runtime dependencies**, enforced by a test and again in CI.
+
+Reasons **not** to choose it: you need a limit enforced across many processes;
+you need strict rolling-window semantics with weighted costs; you want a
+`fetch` wrapper with provider presets and built-in status-code handling. None
+of those are on the roadmap, and the first is deferred for correctness reasons
+rather than scope.
+
+## Requirements
+
+Node 22 or newer — the Node lines still receiving security patches. CI runs the
+full suite on **22, 24 and 26**, and `engines.node` is `>=22` to match.
+
+The library's own API floor is lower (it uses `AbortController`,
+`AbortSignal.reason` and `Error.cause`, all available on Node 18), but a
+support claim is only worth making for versions that are tested and patched.
+
+TypeScript 5.0 or newer for the bundled declarations. Published as both ESM and
+CommonJS, with types for each; no bundler is involved in the build.
 
 ## Minimal example
 
@@ -536,10 +593,24 @@ npm test            # vitest; virtual time everywhere but two files
 npm run build       # dual ESM + CJS via tsc, no bundler
 npm run smoke       # pack, install into ESM/CJS/TS fixtures, import, assert
 npm run verify      # all five
+npm run preflight   # release checks: version consistency, metadata, dist-tag
 ```
 
-Requires Node 18 or newer. Tested on 18, 20 and 22.
+CI runs all of it on Node 22, 24 and 26.
+
+## Contributing
+
+Issues and pull requests are welcome. Two things worth knowing before opening
+one:
+
+- **`docs/DECISIONS.md` is the first place to look.** Several obvious-looking
+  features are absent on purpose — provider presets, built-in status-code
+  classification, a `fetch` wrapper — and the reasoning, including what was
+  rejected, is written down there.
+- **Guarantees are tested, not asserted.** A change that touches admission,
+  the queue or cancellation needs the test that would have caught the bug, and
+  `npm run verify` has to stay green on its own.
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

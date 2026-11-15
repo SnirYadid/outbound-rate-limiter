@@ -9,14 +9,34 @@
     "throttle",
     "retry",
     "backoff",
+    "exponential-backoff",
+    "retry-after",
     "concurrency",
-    "quota"
+    "concurrency-limit",
+    "queue",
+    "scheduler",
+    "quota",
+    "api-client",
+    "abortsignal",
+    "typescript"
   ],
   "license": "MIT",
   "author": "Snir Yadid",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/REPLACE_ME_OWNER/quota-pilot.git"
+  },
+  "homepage": "https://github.com/REPLACE_ME_OWNER/quota-pilot#readme",
+  "bugs": {
+    "url": "https://github.com/REPLACE_ME_OWNER/quota-pilot/issues"
+  },
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
   },
   "sideEffects": false,
   "exports": {
@@ -53,6 +73,7 @@
     "build:cjs": "tsc -p tsconfig.cjs.json",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "smoke": "node scripts/smoke.mjs",
+    "preflight": "node scripts/preflight.mjs",
     "verify": "npm run lint && npm run typecheck && npm run test && npm run build && npm run smoke",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
