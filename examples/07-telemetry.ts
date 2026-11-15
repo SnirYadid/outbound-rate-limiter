@@ -14,7 +14,7 @@ export async function main(): Promise<{
   hookErrors: number;
 }> {
   const seen: Decision[] = [];
-  const waits: string[] = [];
+  const waits = new Set<string>();
 
   const limiter = createLimiter({
     constraints: [{name: 'per-second', limit: 1, interval: 'second', burst: 1}],
@@ -23,7 +23,12 @@ export async function main(): Promise<{
       if (event.kind === 'delayed') {
         // `binding` names the rate constraint, or the option for concurrency.
         // In real code this line is your logger.
-        waits.push(`${event.cause}:${event.binding}`);
+        //
+        // Collected as a SET because `delayed` reports a wait, not a call: a
+        // blocked call is woken by every completion ahead of it and reports
+        // the same wait again if it is still blocked. How many times that
+        // happens depends on machine timing, so count distinct causes.
+        waits.add(`${event.cause}:${event.binding}`);
       }
     },
   });
@@ -33,7 +38,7 @@ export async function main(): Promise<{
 
   return {
     kinds: [...new Set(seen.map((event) => event.kind))].sort(),
-    waits,
+    waits: [...waits].sort(),
     // A listener that throws, rejects, or re-enters the limiter cannot change
     // any outcome. Its failures are counted here rather than logged.
     hookErrors: limiter.stats().decisionHookErrors,

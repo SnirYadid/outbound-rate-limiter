@@ -432,6 +432,20 @@ export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCal
     // comes back for another go.
     cancelDeadline();
 
+    // Per-key concurrency is counted here, in the same place it is given back
+    // (`claimAttempt`), because an attempt is the thing that occupies a slot.
+    //
+    // It used to be incremented by each admission path instead — the pump and
+    // the queue bypass — with a comment in each telling the reader to keep in
+    // step with the other. Two writers and one reader, three files, held
+    // together by discipline. `onSaturated: 'reject'` was the second path, and
+    // a third would have had to remember a rule that no type or test states.
+    //
+    // Safe because `tryAdmit` reads this counter against `maxConcurrentPerKey`
+    // and both callers invoke `start` in the SAME synchronous turn as that
+    // read, with no `await` between: nothing can observe the gap.
+    partition.inflight++;
+
     attempts++;
     state = 'running';
     const attemptNumber = attempts;

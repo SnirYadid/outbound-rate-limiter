@@ -65,11 +65,14 @@ export function pump(partition: Partition, context: SchedulerContext): void {
       const outcome = tryAdmit(partition, head.cost, now, context);
 
       if (outcome.admitted) {
-        // Dequeue and count the call in BEFORE starting it, so a call that
-        // settles synchronously inside `start` sees consistent state when its
-        // completion handler decrements and re-pumps.
+        // Dequeue BEFORE starting: a task that settles synchronously inside
+        // `start` re-pumps from within this frame, and it must not find itself
+        // still at the head of the queue.
+        //
+        // `start` takes it from here — it counts itself into `inflight` and
+        // owns the release. See the comment there for why that side of the
+        // accounting does not live at the admission sites.
         partition.queue.dequeue();
-        partition.inflight++;
         head.start(outcome.release);
         continue;
       }

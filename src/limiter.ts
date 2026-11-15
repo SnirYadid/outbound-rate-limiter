@@ -366,9 +366,8 @@ export function createLimiter(options: LimiterOptions): Limiter {
       return;
     }
 
-    // Same order the pump uses: count in before starting, so a call that
-    // settles synchronously sees consistent state.
-    partition.inflight++;
+    // Never queued on this path, so there is nothing to dequeue. `start`
+    // counts itself into `inflight`, exactly as it does for the pump.
     call.start(outcome.release);
   }
 }

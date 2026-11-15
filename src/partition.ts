@@ -41,6 +41,10 @@ export interface QueuedCall {
   /**
    * Starts one attempt and takes ownership of `release`.
    *
+   * Also takes ownership of the per-key `inflight` count: it increments on
+   * entry and decrements when the attempt settles, so a caller admits and then
+   * simply starts. Callers must not adjust `inflight` themselves.
+   *
    * MUST NOT throw: it is invoked from inside the pump loop, where a throw
    * would abandon the queue and leak the slot. The implementation catches
    * everything the caller's function can do. May be called more than once over
