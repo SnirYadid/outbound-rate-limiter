@@ -9,9 +9,9 @@
  */
 
 import {execFileSync} from 'node:child_process';
-import {mkdtempSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -38,16 +38,38 @@ try {
   const shipped = manifest.files.map((f) => f.path).sort();
   log(`files:     ${shipped.length} entries`);
 
+  const allowedDocs = [
+    'package.json',
+    'README.md',
+    'LICENSE',
+    'CHANGELOG.md',
+    'docs/ARCHITECTURE.md',
+    'docs/DECISIONS.md',
+    'docs/GUARANTEES.md',
+  ];
   const unexpected = shipped.filter(
     (path) =>
-      !path.startsWith('dist/') &&
-      !['package.json', 'README.md', 'LICENSE', 'CHANGELOG.md', 'docs/GUARANTEES.md'].includes(path)
+      !path.startsWith('dist/') && !path.startsWith('src/') && !allowedDocs.includes(path)
   );
   if (unexpected.length > 0) {
     throw new Error(`unexpected files in the tarball: ${unexpected.join(', ')}`);
   }
   for (const required of ['dist/esm/index.js', 'dist/cjs/index.js', 'dist/esm/index.d.ts', 'dist/cjs/index.d.ts']) {
     if (!shipped.includes(required)) throw new Error(`tarball is missing ${required}`);
+  }
+
+  // Every shipped source map must point at a file that is also shipped.
+  // Maps are generated with paths into `src/`, so shipping maps without `src`
+  // gives a debugger nothing to open — a dangling map looks like working
+  // support for stepping into the library, and is not.
+  for (const path of shipped.filter((p) => p.endsWith('.map'))) {
+    const map = JSON.parse(readFileSync(join(root, path), 'utf8'));
+    for (const source of map.sources) {
+      const resolved = join(dirname(path), source);
+      if (!shipped.includes(resolved)) {
+        throw new Error(`${path} points at ${resolved}, which is not in the tarball`);
+      }
+    }
   }
 
   // --- ESM consumer -----------------------------------------------------

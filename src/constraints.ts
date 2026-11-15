@@ -42,7 +42,13 @@ export function resolveIntervalMs(interval: number | IntervalUnit): number {
 export function normalizeConstraints(
   input: readonly RateConstraint[]
 ): NormalizedConstraint[] {
-  if (!Array.isArray(input) || input.length === 0) {
+  // The runtime check is done on a separate `unknown` local on purpose.
+  // `Array.isArray` narrows a `readonly T[]` to `any[]`, so testing `input`
+  // directly would erase the element type for the whole function below — and
+  // every field validation after it would be unchecked `any`. Lint caught
+  // this; the types had been quietly off since day one.
+  const asUnknown: unknown = input;
+  if (!Array.isArray(asUnknown) || input.length === 0) {
     throw new QuotaPilotConfigError('At least one rate constraint is required.');
   }
 

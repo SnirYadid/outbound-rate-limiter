@@ -102,6 +102,41 @@ describe('telemetry — delays name what is blocking', () => {
     await settleAll(clock, [second]);
   });
 
+  it('re-reports a delay every time the head is woken and is still blocked', async () => {
+    // `delayed` counts WAIT DECISIONS, not calls. A rate-blocked head is woken
+    // by every completion ahead of it, re-checks, finds the same wait and says
+    // so again. That is honest — each wake really is a fresh decision — but a
+    // listener that counts `delayed` events is not counting delayed calls.
+    // Documented in GUARANTEES; pinned here so it cannot change silently.
+    const {clock, limiter, events} = watched([
+      {name: 'per-minute', limit: 2, interval: 'minute', burst: 2},
+    ]);
+
+    const gate = deferred();
+    const calls = [
+      limiter.run(() => gate.promise, {key: 'k'}),
+      limiter.run(() => gate.promise, {key: 'k'}),
+      // No capacity left for this one; it waits out the minute.
+      limiter.run(() => 'third', {key: 'k'}),
+    ];
+    await clock.flush();
+
+    const delaysBefore = events.filter((event) => event.kind === 'delayed').length;
+    expect(delaysBefore).toBe(1);
+
+    // Releasing the two in flight wakes the pump twice. Neither wake helps:
+    // the block is capacity, and the clock has not moved.
+    gate.resolve();
+    await clock.flush();
+
+    const delaysAfter = events.filter((event) => event.kind === 'delayed').length;
+    expect(delaysAfter).toBeGreaterThan(delaysBefore);
+    // Still ONE call waiting, however many delay events it produced.
+    expect(limiter.stats().queued).toBe(1);
+
+    await settleAll(clock, calls);
+  });
+
   it('reports a global concurrency block, with a zero wait', async () => {
     const {clock, limiter, events} = watched(plenty, {maxConcurrent: 1});
     const gate = deferred();
@@ -431,7 +466,7 @@ describe('telemetry — listener failure isolation', () => {
       constraints: plenty,
       clock,
       onDecision: (): void => {
-        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+         
         return Promise.reject(new Error('async listener failed')) as unknown as void;
       },
     });
@@ -486,9 +521,7 @@ describe('telemetry — reentrancy', () => {
     const events: Decision[] = [];
     let depth = 0;
     let maxDepth = 0;
-    let limiter!: ReturnType<typeof createLimiter>;
-
-    limiter = createLimiter({
+    const limiter: ReturnType<typeof createLimiter> = createLimiter({
       constraints: plenty,
       clock,
       onDecision: (event) => {
@@ -514,9 +547,7 @@ describe('telemetry — reentrancy', () => {
   it('a listener can read stats and inspect without disturbing anything', async () => {
     const clock = createVirtualClock(0);
     const observed: number[] = [];
-    let limiter!: ReturnType<typeof createLimiter>;
-
-    limiter = createLimiter({
+    const limiter: ReturnType<typeof createLimiter> = createLimiter({
       constraints: paced,
       clock,
       onDecision: () => {
@@ -541,9 +572,7 @@ describe('telemetry — reentrancy', () => {
     // decision.
     const clock = createVirtualClock(0);
     const seenAtAdmission: number[] = [];
-    let limiter!: ReturnType<typeof createLimiter>;
-
-    limiter = createLimiter({
+    const limiter: ReturnType<typeof createLimiter> = createLimiter({
       constraints: [{name: 'c', limit: 10, interval: 'minute', burst: 10}],
       clock,
       onDecision: (event) => {
@@ -571,8 +600,7 @@ describe('emitter — unit', () => {
 
   it('flushes nested emissions in order after the outer call', () => {
     const order: string[] = [];
-    let emitter!: ReturnType<typeof createEmitter>;
-    emitter = createEmitter((event) => {
+    const emitter: ReturnType<typeof createEmitter> = createEmitter((event) => {
       order.push(`enter:${event.kind}`);
       if (event.kind === 'queued') {
         emitter.emit(sealEvent({at: 0, key: 'k', scope: 'process', kind: 'completed', attempts: 1, elapsedMs: 0}));

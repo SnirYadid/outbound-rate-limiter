@@ -44,6 +44,6 @@ export const realClock: Clock = {
     // way to reach a clean exit; a pending timer holding the process open is
     // the honest signal that work is still outstanding.
     const handle = setTimeout(fn, ms);
-    return () => clearTimeout(handle);
+    return () => { clearTimeout(handle); };
   },
 };

@@ -681,7 +681,7 @@ describe('MANDATORY 8 — total deadline', () => {
 
     // The next token is a minute away, but this caller will only wait 500ms.
     const impatient = limiter.run(() => 'never-runs', {key: 'k', totalBudgetMs: 500});
-    let ran = false;
+    const ran = false;
     void impatient.catch(() => undefined);
 
     await clock.advance(500);

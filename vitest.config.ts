@@ -1,6 +1,15 @@
+import {fileURLToPath} from 'node:url';
+
 import {defineConfig} from 'vitest/config';
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      // Mirrors the tsconfig path mapping, so the examples import the package
+      // by name and the README can quote them verbatim.
+      'quota-pilot': fileURLToPath(new URL('./src/index.ts', import.meta.url)),
+    },
+  },
   test: {
     include: ['test/**/*.spec.ts'],
     // Real time must never be needed. A suite that hangs is a suite that

@@ -58,6 +58,11 @@ export function createEmitter(listener: Listener | undefined): Emitter {
 
   const deliver = (event: Decision): void => {
     try {
+      // The listener's declared return type is `void`, so capturing it looks
+      // like a mistake. It is the opposite: an `async` listener returns a
+      // promise regardless of what the type says, and this is the only place
+      // that promise can be caught before it becomes an unhandled rejection.
+      // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression
       const returned: unknown = listener(event);
       if (isThenable(returned)) {
         // An `async` listener's rejection has nowhere else to go.
@@ -84,10 +89,8 @@ export function createEmitter(listener: Listener | undefined): Emitter {
         // `deliver` never throws, so this loop always terminates and the
         // buffer always empties.
         while (pending.length > 0) {
-          const next = pending.shift();
-          /* c8 ignore next -- length was just checked */
-          if (next === undefined) break;
-          deliver(next);
+          // Non-empty by the loop condition, as in semaphore.ts.
+          deliver(pending.shift()!);
         }
       } finally {
         delivering = false;

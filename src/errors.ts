@@ -142,14 +142,6 @@ export class QuotaPilotTimeoutError extends QuotaPilotError {
   }
 }
 
-/** `run()` called after `drain()`. */
-export class QuotaPilotClosedError extends QuotaPilotError {
-  constructor(message: string, details?: QuotaPilotErrorDetails) {
-    super(message, details);
-    this.name = 'QuotaPilotClosedError';
-  }
-}
-
 /**
  * The caller's `AbortSignal` fired.
  *

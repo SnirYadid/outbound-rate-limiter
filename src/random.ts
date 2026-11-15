@@ -9,6 +9,7 @@
 /** Returns a value in `[0, 1)`. */
 export type RandomFn = () => number;
 
+/** The default. Not exported from the package: omit `random` to get it. */
 export const defaultRandom: RandomFn = () => Math.random();
 
 /**

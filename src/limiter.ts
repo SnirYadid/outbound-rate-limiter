@@ -100,7 +100,9 @@ export function createLimiter(options: LimiterOptions): Limiter {
     semaphore,
     maxConcurrentPerKey,
     clock,
-    emit: emitter.emit,
+    emit: (event) => {
+      emitter.emit(event);
+    },
     telemetry: emitter.active,
   };
   const inspectContext: InspectContext = {constraints, registry, clock};
@@ -193,6 +195,10 @@ export function createLimiter(options: LimiterOptions): Limiter {
         // cancellation cannot be confused with a limiter refusal.
         if (signal?.aborted === true) {
           publishRefusal(key, 'aborted');
+          // The signal's own `reason` is rethrown verbatim so this
+          // interoperates with fetch. A caller may abort with any value, and
+          // substituting our own would discard what they said.
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
           reject(
             signal.reason ??
               new QuotaPilotAbortError('The call was aborted before it was submitted.', {key})
@@ -209,6 +215,9 @@ export function createLimiter(options: LimiterOptions): Limiter {
           partition = registry.acquire(key);
         } catch (error) {
           publishRefusal(key, 'key-limit');
+          // A caught value is rethrown as-is; narrowing it would discard the
+          // real cause.
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
           reject(error);
           return;
         }
@@ -235,7 +244,9 @@ export function createLimiter(options: LimiterOptions): Limiter {
             cancelWake: () => {
               cancelWake(partition);
             },
-            emit: emitter.emit,
+            emit: (event) => {
+              emitter.emit(event);
+            },
             telemetry: emitter.active,
           }
         );

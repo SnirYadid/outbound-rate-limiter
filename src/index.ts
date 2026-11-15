@@ -14,7 +14,7 @@
  * and your real ceiling is N times what you configured.
  */
 
-export const VERSION = '0.1.0-alpha.4';
+export const VERSION = '0.1.0-alpha.5';
 
 export {createLimiter} from './limiter.js';
 export type {
@@ -40,12 +40,11 @@ export type {CancelTimer, Clock} from './time.js';
 export {realClock} from './time.js';
 
 export type {RandomFn} from './random.js';
-export {createSeededRandom, defaultRandom} from './random.js';
+export {createSeededRandom} from './random.js';
 
 export {
   QuotaPilotAbortError,
   QuotaPilotBudgetError,
-  QuotaPilotClosedError,
   QuotaPilotConfigError,
   QuotaPilotError,
   QuotaPilotKeyLimitError,

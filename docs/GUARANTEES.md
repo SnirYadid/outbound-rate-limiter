@@ -195,6 +195,73 @@ on. Ties go to declaration order.
 
 ---
 
+## What bounds accepted work
+
+`maxQueueDepth` is **intake** backpressure. It bounds how many calls a key will
+*accept* while it is already backed up; it does not bound how many accepted
+calls exist. With retries in play those are different numbers, and the
+difference is deliberate (R8).
+
+Three measured facts, each pinned by a test in `test/stress.spec.ts`:
+
+| | |
+|---|---|
+| **The bound works on what it is for.** | 50 calls at `maxQueueDepth: 4` against a 1/minute limit: 1 ran, 4 queued, **45 refused** with `QuotaPilotQueueFullError`. |
+| **A retry re-enters past the bound.** | A retry goes to the tail of its key's queue without a depth check, because it was already accepted. With `maxQueueDepth: 2`, a retry storm was measured holding **more than 2** queued. |
+| **Backing-off work is not in the queue at all.** | A sleeping retry holds no queue entry (R5), so it frees intake room while still being work the limiter owes you. With `maxQueueDepth: 2`, accepted-unsettled work peaked at **several times** that. |
+
+So the quantity to reason about is accepted-unsettled calls, which is bounded by
+your admission rate and your backoff, not by the queue depth:
+
+```
+accepted-unsettled  ≈  arrival rate × (mean backoff + mean attempt time) × attempts
+```
+
+At roughly **3 KB per unsettled call** (the call closure, its queue entry, one
+timer and the per-attempt context), 10,000 of them is about 30 MB. It is
+bounded, not leaked: every stress test above asserts
+`{queued: 0, inflight: 0, backingOff: 0}` and zero pending timers once the storm
+clears.
+
+### If you need acceptance itself bounded
+
+`maxQueueDepth` is the wrong tool; it only applies the second time. Use one of:
+
+```ts
+// 1. Refuse instead of waiting. Nothing accumulates, because nothing queues.
+await limiter.run(task, {key, onSaturated: 'reject'});
+
+// 2. Bound the wait, so an accepted call cannot sit indefinitely.
+await limiter.run(task, {key, totalBudgetMs: 30_000, retry: {maxAttempts: 3, classify}});
+
+// 3. Bound your own producer. A limiter cannot stop you calling run().
+if (limiter.stats().queued + limiter.stats().backingOff > ceiling) await limiter.drain();
+```
+
+Option 1 is the honest one for an inbound request handler: a caller who cannot
+be served now should be told now. Option 2 is right for a job runner, where
+waiting is fine but waiting forever is not.
+
+---
+
+## Operational limits
+
+Not correctness problems, but things to know before running this at scale.
+
+- **`stats()` iterates the partition map**, so it is O(keys) — up to `maxKeys`,
+  10,000 by default. It is for operators and tests and is never on the admission
+  path. A maintained counter would be one more thing that can drift from the
+  truth.
+- **Rate-blocked waits are not coalesced across keys.** Each waiting key holds
+  its own timer, so N rate-blocked keys means N pending timers.
+- **The queue dequeues with `Array.shift`**, which is O(n). Irrelevant at the
+  default bound of 1024.
+- **`delayed` telemetry counts waits, not calls.** A blocked call is woken by
+  every completion ahead of it, re-checks, and reports the same wait again. One
+  call can produce many `delayed` events.
+
+---
+
 ## `inspect()` — a snapshot that costs nothing
 
 ```ts
@@ -286,6 +353,12 @@ Pass `onDecision` to receive one event per scheduler decision. Six kinds:
 `cause` on a `delayed` event is never `'queued-ahead'` — that is a refusal, not
 a delay. `binding` names a rate constraint for `cause: 'rate'`, and the option
 (`maxConcurrent` / `maxConcurrentPerKey`) otherwise.
+
+**`delayed` reports a wait, not a call.** A blocked call is woken by every
+completion ahead of it; if the block has not cleared it reports the same wait
+again. `queued`, `completed` and `refused` are once per call; `admitted` and
+`retrying` are once per attempt; `delayed` is once per wait decision. Count
+calls by `queued`, not by `delayed`.
 
 ---
 

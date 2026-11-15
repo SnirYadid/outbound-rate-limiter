@@ -218,12 +218,13 @@ export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCal
 
     deadlineTimer = clock.setTimer(() => {
       deadlineTimer = undefined;
-      // Both guards are unreachable today, because the deadline is cancelled
-      // the moment an attempt starts — so it cannot fire against a call that
-      // has been admitted or settled. They are the reason that cancellation
-      // can be removed later without this timer becoming a hazard.
-      /* c8 ignore next 2 */
-      if (settled) return;
+      // Unreachable today — the deadline is cancelled the moment an attempt
+      // starts — and load-bearing all the same. `settle` already refuses a
+      // second settlement, but `settled` is FALSE while an attempt runs, so
+      // without this check a stray deadline would reject a caller whose work
+      // is still in flight. The queue membership is the thing that
+      // distinguishes "still waiting" from "already running".
+      /* c8 ignore next */
       if (!partition.queue.remove(call)) return;
       env.cancelWake();
       settleRejected(budgetRefusal(), 'budget');
@@ -523,12 +524,11 @@ export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCal
       // A synchronous throw still spent capacity and a slot. Both are
       // accounted for; capacity is never refunded (G7).
       //
-      // The guard is unreachable here — the attempt was started in this same
-      // turn, so nothing can have claimed it — but `claimAttempt` is the only
-      // sanctioned way to release a slot, and bypassing it would be the kind
-      // of shortcut that leaks one.
-      /* c8 ignore next */
-      if (!claimAttempt()) return;
+      // Unconditional on purpose. Nothing can have claimed this attempt — it
+      // was started in the same synchronous turn — so testing the result
+      // would be a branch no test could reach. `claimAttempt` is still the
+      // only sanctioned way to release the slot.
+      claimAttempt();
       decide(error, false);
       return;
     }

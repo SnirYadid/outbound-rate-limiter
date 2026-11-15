@@ -3,7 +3,6 @@ import {describe, expect, it} from 'vitest';
 import {
   QuotaPilotAbortError,
   QuotaPilotBudgetError,
-  QuotaPilotClosedError,
   QuotaPilotConfigError,
   QuotaPilotError,
   QuotaPilotKeyLimitError,
@@ -21,7 +20,6 @@ describe('error taxonomy', () => {
       new QuotaPilotKeyLimitError('x'),
       new QuotaPilotBudgetError('x'),
       new QuotaPilotTimeoutError('x', {timeoutMs: 1}),
-      new QuotaPilotClosedError('x'),
       new QuotaPilotAbortError(),
     ];
 
@@ -37,7 +35,6 @@ describe('error taxonomy', () => {
     expect(new QuotaPilotBudgetError('x').name).toBe('QuotaPilotBudgetError');
     expect(new QuotaPilotQueueFullError('x').name).toBe('QuotaPilotQueueFullError');
     expect(new QuotaPilotKeyLimitError('x').name).toBe('QuotaPilotKeyLimitError');
-    expect(new QuotaPilotClosedError('x').name).toBe('QuotaPilotClosedError');
     expect(new QuotaPilotSaturatedError('x', {kind: 'rate', waitMs: 1, binding: 'b'}).name).toBe(
       'QuotaPilotSaturatedError'
     );

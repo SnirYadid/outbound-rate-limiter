@@ -159,6 +159,22 @@ describe('test-suite determinism', () => {
 
     expect(offenders).toEqual([]);
   });
+
+  it('confines real-clock limiters to the examples suite', () => {
+    // The scanner above cannot see this one. The examples deliberately use the
+    // default real clock, because they are what a consumer writes and a
+    // consumer does not inject a clock — so any suite importing them inherits
+    // real time. Keeping that to one file is what keeps the rest of the suite
+    // fast and deterministic, and this asserts it rather than hoping.
+    const testDir = join(root, 'test');
+    const importers = sourceFiles(testDir)
+      .map((path) => path.slice(testDir.length + 1))
+      .filter((relative) =>
+        /from '\.\.\/examples\//.test(readFileSync(join(testDir, relative), 'utf8'))
+      );
+
+    expect(importers).toEqual(['examples.spec.ts']);
+  });
 });
 
 describe('public surface', () => {
@@ -168,7 +184,6 @@ describe('public surface', () => {
     expect(Object.keys(publicApi).sort()).toEqual([
       'QuotaPilotAbortError',
       'QuotaPilotBudgetError',
-      'QuotaPilotClosedError',
       'QuotaPilotConfigError',
       'QuotaPilotError',
       'QuotaPilotKeyLimitError',
@@ -178,7 +193,6 @@ describe('public surface', () => {
       'VERSION',
       'createLimiter',
       'createSeededRandom',
-      'defaultRandom',
       'realClock',
     ]);
   });
@@ -186,6 +200,11 @@ describe('public surface', () => {
   it('does not export bucket, constraint or scheduler internals', () => {
     const names = Object.keys(publicApi);
     for (const internal of [
+      // Removed from the public surface in the day-6 audit: `defaultRandom`
+      // gave no capability (omit `random` to get it) and
+      // `QuotaPilotClosedError` was never thrown by anything.
+      'defaultRandom',
+      'QuotaPilotClosedError',
       'peek',
       'commit',
       'refill',

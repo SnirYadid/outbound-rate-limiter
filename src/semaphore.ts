@@ -53,9 +53,9 @@ export function createSemaphore(capacity: number): Semaphore {
     draining = true;
     try {
       while (inFlight < capacity && waiters.length > 0) {
-        const waiter = waiters.shift();
-        /* c8 ignore next */
-        if (waiter === undefined) break;
+        // Non-empty by the loop condition; `shift()` is only typed as
+        // possibly-undefined because of `noUncheckedIndexedAccess`.
+        const waiter = waiters.shift()!;
         waiter();
       }
     } finally {

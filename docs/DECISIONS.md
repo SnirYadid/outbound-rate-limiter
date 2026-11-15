@@ -74,7 +74,9 @@ cap — but one function that never settles would deadlock the limiter
 permanently. A misbehaving task should degrade the bound, not stop the world.
 
 The cost is paid in honesty, not in silence: `maxConcurrent` is documented as
-bounding *observable* in-flight work, `stats().abandoned` reports the gap, late
+bounding *observable* in-flight work (`stats().abandoned` was proposed here and
+deliberately never built — see the correction in GUARANTEES.md: nothing could
+decrement it), late
 completions emit `settled` with `late: true`, and their rejections are
 swallowed so an abandoned promise cannot crash the process.
 
@@ -156,9 +158,15 @@ afterwards. The library writes nothing to the console.
 ## D14 — Single process, stated structurally
 
 `scope: 'process'` is a literal on every event. `warnings` is populated at
-construction for any window longer than 15 minutes. `describe()` returns an
-operator-readable block including the fleet-ceiling line. The README says it
-above the install instructions.
+construction for any window longer than 15 minutes. The README says it above
+the install instructions.
+
+**Correction (day 6):** this entry originally promised a `describe()` method
+returning an operator-readable block. It was never built, and on review it is
+not wanted: `warnings` already carries the configuration problems worth
+surfacing, and `scope` on every event carries the fleet-ceiling caveat to the
+place an operator actually reads. A third way to say the same thing is surface
+without capability.
 
 Stating the limitation is not modesty; it is what makes the remaining
 guarantees trustworthy.
@@ -299,16 +307,26 @@ mistakes, not runtime conditions.
 ## D27 — Capacity is committed in the same turn the task is invoked
 
 There is no `await` between the commit and calling the user's function, which
-is the contract Day 1 documented. The cost is bounded recursion: a task that
-throws synchronously re-pumps from inside its own stack frame, so a chain of
-synchronous failures across N keys nests N deep. Measured fine at 250 keys and
-tested there.
+is the contract Day 1 documented.
 
-The alternative — deferring invocation by a microtask — would keep the
-atomicity guarantee (capacity is already committed and the slot held) and flatten
-the stack. It was not taken because it contradicts a documented Day 1 contract
-for a problem nobody has hit. If deep recursion ever bites, a trampoline in
-`finish` is the fix.
+**Correction (Day 6).** Day 2 recorded the cost of this as "a chain of
+synchronous failures across N keys nests N deep", measured at 250 keys. That
+analysis was wrong, and the stress tests written to find its limit found there
+is none to find. Stack depth is a **constant 6 frames** — unchanged from 1 key
+to 20,000, from 100 calls to 50,000, with and without retries, and with a
+telemetry listener submitting new work on every event. The engine's own limit
+is around 9,000 frames.
+
+The reason it is flat was already in the code: three reentrancy guards
+(`partition.pumping`, the semaphore's `draining`, the emitter's `delivering`)
+mean a nested pump returns immediately and the *outer* loop picks the work up.
+That makes the pump iterative in effect, whatever it looks like in the source.
+
+So no trampoline is needed and none was added. The microtask-deferral
+alternative stays rejected, now for a better reason than "nobody has hit it":
+there is nothing to fix. What the stress tests do bound is accepted work in
+memory, which is a different question — see "What bounds accepted work" in
+GUARANTEES.md.
 
 ## D28 — Day 2 necessarily contains a working synchronous admission step
 

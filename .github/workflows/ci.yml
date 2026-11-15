@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and the current LTS. 18 is the floor because the library
+        # uses AbortController/AbortSignal and Error `cause`, and deliberately
+        # avoids AbortSignal.any, which landed in 20.
+        node: ['18', '20', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint and module layering
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      - name: Coverage thresholds
+        run: npx vitest run --coverage
+
+      - name: Build
+        run: npm run build
+
+      - name: Consumer packaging smoke (ESM, CJS, TypeScript)
+        run: npm run smoke
+
+      - name: Zero runtime dependencies
+        # Also asserted by a test; repeated here so a dependency added in a
+        # merge cannot slip through on a green test run alone.
+        run: |
+          deps=$(node -p "JSON.stringify(require('./package.json').dependencies ?? {})")
+          peer=$(node -p "JSON.stringify(require('./package.json').peerDependencies ?? {})")
+          echo "dependencies: $deps"
+          echo "peerDependencies: $peer"
+          test "$deps" = "{}" && test "$peer" = "{}"

@@ -114,7 +114,6 @@ real boundary rather than `burst + TOKEN_EPSILON`.
 ### Not yet implemented
 
 Retries, per-attempt timeouts, cancellation, telemetry events, `drain()`.
-See `docs/DAY4-PLAN.md`.
 
 ## 0.1.0-alpha.3 — unreleased
 
@@ -202,3 +201,80 @@ complete for this release line.
 
 `close()`, lint-enforced module layering, a `fetch` adapter, shared/distributed
 state. See docs/GUARANTEES.md, "Not in this release".
+
+## 0.1.0-alpha.5 — unreleased
+
+Day 6 (M6): release hardening. No new features; one real bug fixed, one
+documented limitation retracted as wrong.
+
+### Added
+
+- **ESLint 9 flat config** (`eslint.config.js`) on `strictTypeChecked`, with the
+  nine-layer module DAG encoded as one `no-restricted-imports` override per
+  layer. An upward or sideways import now fails lint with the layer named.
+- **`test/architecture.spec.ts`** — cycle detection built from the source graph
+  (failure message names the path), plus layer-0 purity, the deliberate absence
+  of `call` → `scheduler`, and no module orphaned from `index`.
+- **`test/stress.spec.ts`** — pump stack depth under 20,000 keys, 50,000 calls,
+  retry storms and a work-submitting telemetry listener; and four tests pinning
+  what does and does not bound accepted work.
+- **`examples/`** — nine runnable files, executed by `test/examples.spec.ts`
+  with their documented results asserted. The README quotes them rather than
+  carrying prose that can drift.
+- **`docs/ARCHITECTURE.md`** — the layers, what enforces each invariant, and why
+  cycle detection is a test rather than a lint rule.
+- **CI** (`.github/workflows/ci.yml`) — lint, typecheck, tests, coverage
+  thresholds, build, consumer smoke and a zero-dependency assertion on Node 18,
+  20 and 22.
+- `src/` and `docs/{ARCHITECTURE,DECISIONS}.md` are now published. Shipped
+  source maps point into `src/`, so shipping maps without it gave debuggers
+  nothing to open. The smoke test now asserts every map resolves inside the
+  tarball.
+
+### Fixed
+
+- **Constraint validation was silently untyped.** `Array.isArray()` narrows a
+  `readonly T[]` to `any[]`, so testing the input array directly erased the
+  element type for the rest of the function and every field check after it ran
+  as unchecked `any`. The runtime check now uses a separate `unknown` local.
+  Found by lint on the first run.
+- `examples/classifiers.ts`: a `Retry-After` parser that tries `Number()` and
+  falls through to `Date.parse()` turns `-5` into a date in 2001, because
+  `Date.parse('-5')` is not `NaN`. Both header forms are now matched by shape.
+
+### Changed
+
+- **Removed `defaultRandom` and `QuotaPilotClosedError` from the public
+  surface.** The first is reachable as the default when `random` is omitted; the
+  second was never thrown by anything. Runtime exports are now 12.
+- Replaced defensive `shift()` undefined guards in `semaphore.ts` and
+  `telemetry.ts` with assertions plus the loop invariant that makes them safe —
+  two fewer unreachable branches.
+- `call.ts`: dropped a redundant `settled` check in the deadline timer and made
+  the sync-throw path's attempt claim unconditional.
+- Retired `docs/DAY4-PLAN.md` and `docs/HANDOFF.md`. They were day-to-day
+  planning artifacts, superseded by ARCHITECTURE, GUARANTEES and DECISIONS, and
+  parts of them were no longer true.
+
+### Retracted
+
+- **D27's recursion claim was wrong.** Day 2 recorded that a chain of
+  synchronous failures across N keys "nests N deep". Stack depth is a constant
+  6 frames — from 1 key to 20,000, 100 calls to 50,000, with and without
+  retries. Three existing reentrancy guards already make the pump iterative in
+  effect. No trampoline was needed and none was added.
+
+### Documented
+
+- **GUARANTEES: "What bounds accepted work."** `maxQueueDepth` bounds intake,
+  not accepted calls: a retry re-enters past the bound and a backing-off call
+  holds no queue entry at all. With the measured numbers, the sizing formula,
+  roughly 3 KB per unsettled call, and the three ways to bound acceptance
+  itself.
+- **GUARANTEES: operational limits** — `stats()` is O(keys), rate waits are not
+  coalesced across keys, and `delayed` telemetry counts waits rather than calls
+  (a blocked call re-reports on every wake).
+- README rewritten and reordered: what it does, the problem, then each feature
+  in the order a reader meets it, then the four things to know before adopting
+  it (single-process scope, token bucket versus sliding window, observable
+  versus physical concurrency, queue depth with retries).
