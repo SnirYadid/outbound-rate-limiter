@@ -61,6 +61,7 @@ import {
   QuotaPilotConfigError,
   QuotaPilotError,
   QuotaPilotQueueFullError,
+  QuotaPilotSaturatedError,
   createLimiter,
   createSeededRandom,
   realClock,
@@ -115,6 +116,42 @@ await assert.rejects(() => tiny.run(() => 'overflow'), QuotaPilotQueueFullError)
 void held;
 void queued;
 
+// onSaturated: 'reject' names the binding constraint rather than queueing.
+const strict = createLimiter({
+  constraints: [
+    {name: 'fast', limit: 100, interval: 'second'},
+    {name: 'slow', limit: 1, interval: 'minute', burst: 1},
+  ],
+});
+assert.equal(await strict.run(() => 'first', {key: 'acct'}), 'first');
+const refused = await strict
+  .run(() => 'second', {key: 'acct', onSaturated: 'reject'})
+  .then(() => null, (error) => error);
+assert.ok(refused instanceof QuotaPilotSaturatedError, 'expected a saturation refusal');
+assert.equal(refused.kind, 'rate');
+assert.equal(refused.binding, 'slow', 'the slower constraint is the binding one');
+assert.ok(refused.waitMs > 0);
+
+// inspect() is read-only and does not create partitions.
+const unseen = strict.inspect('never-touched');
+assert.equal(unseen.tracked, false);
+assert.equal(unseen.constraints.length, 2);
+assert.ok(Object.isFrozen(unseen), 'snapshots are frozen');
+// On a REAL clock the projection must track elapsed time, so capacity grows
+// between reads. "Side-effect-free" means it consumes and commits nothing —
+// not that it returns a frozen number. So the real-clock assertion is that
+// capacity only ever moves UP, and never past the declared ceiling.
+const before = strict.inspect('acct').constraints.map((c) => c.available);
+for (let i = 0; i < 25; i++) strict.inspect('acct');
+const after = strict.inspect('acct').constraints;
+after.forEach((entry, index) => {
+  assert.ok(
+    entry.available >= before[index],
+    'inspect() consumed capacity on ' + entry.name
+  );
+  assert.ok(entry.available <= entry.capacity, 'capacity cannot exceed its ceiling');
+});
+
 console.log('esm ok, version', VERSION);
 `
   );
@@ -149,6 +186,20 @@ assert.equal(createSeededRandom(2)(), createSeededRandom(2)());
   ]);
   assert.deepEqual(out, ['one', 'two']);
   assert.equal(limiter.stats().inflight, 0);
+
+  const snapshot = limiter.inspect('k');
+  assert.equal(snapshot.tracked, true);
+  assert.equal(snapshot.constraints[0].name, 'burst');
+  // Two of five units were spent. A range, not an exact value: on a real clock
+  // the bucket refills in the milliseconds between the calls and this read.
+  // The deterministic exact-value assertions live in the virtual-clock suite.
+  assert.ok(
+    snapshot.constraints[0].available >= 3 && snapshot.constraints[0].available < 4,
+    'expected roughly 3 of 5 units left, saw ' + snapshot.constraints[0].available
+  );
+  assert.equal(limiter.inspect('unseen').tracked, false);
+  assert.equal(await limiter.run(() => 'now', {key: 'k', onSaturated: 'reject'}), 'now');
+
   console.log('cjs ok, version', VERSION);
 })().catch((error) => {
   console.error(error);
@@ -164,7 +215,16 @@ assert.equal(createSeededRandom(2)(), createSeededRandom(2)());
   writeFileSync(
     join(typesDir, 'check.ts'),
     `import {createLimiter, QuotaPilotConfigError, VERSION} from 'quota-pilot';
-import type {AttemptContext, Limiter, LimiterOptions, RateConstraint, RunOptions} from 'quota-pilot';
+import type {
+  AttemptContext,
+  ConstraintSnapshot,
+  KeySnapshot,
+  Limiter,
+  LimiterOptions,
+  RateConstraint,
+  RunOptions,
+  SaturationKind,
+} from 'quota-pilot';
 
 const constraint: RateConstraint = {name: 'per-second', limit: 10, interval: 'second'};
 const options: LimiterOptions = {constraints: [constraint], maxConcurrent: 4};
@@ -172,9 +232,13 @@ const limiter: Limiter = createLimiter(options);
 const runOptions: RunOptions = {key: 'acct', cost: 2};
 const pending: Promise<number> = limiter.run((ctx: AttemptContext) => ctx.elapsedMs, runOptions);
 const warnings: readonly string[] = limiter.warnings;
+const strictOptions: RunOptions = {key: 'acct', onSaturated: 'reject'};
+const snapshot: KeySnapshot = limiter.inspect('acct');
+const first: ConstraintSnapshot | undefined = snapshot.constraints[0];
+const kinds: SaturationKind[] = ['rate', 'concurrency', 'key-concurrency', 'queued-ahead'];
 const version: string = VERSION;
 const error: Error = new QuotaPilotConfigError('nope');
-export {constraint, limiter, pending, warnings, version, error};
+export {constraint, limiter, pending, warnings, strictOptions, snapshot, first, kinds, version, error};
 `
   );
   writeFileSync(

@@ -29,7 +29,7 @@ the surface below — types describing unbuilt behaviour are deliberately *not*
 exported, because a published type is a promise.
 
 ```ts
-import {createLimiter} from 'quota-pilot';
+import {createLimiter, QuotaPilotSaturatedError} from 'quota-pilot';
 
 const limiter = createLimiter({
   constraints: [
@@ -46,6 +46,32 @@ const rows = await limiter.run(() => fetchPage(url), {key: credentialId});
 Each `key` holds entirely separate capacity, so one busy account cannot slow
 another. `cost` lets a call consume more than one unit, for providers that
 price requests in credits.
+
+Prefer to fail fast instead of waiting? Ask, and find out exactly what stopped
+you:
+
+```ts
+try {
+  await limiter.run(() => fetchPage(url), {key: credentialId, onSaturated: 'reject'});
+} catch (error) {
+  if (error instanceof QuotaPilotSaturatedError) {
+    error.kind;    // 'rate' | 'concurrency' | 'key-concurrency' | 'queued-ahead'
+    error.binding; // which limit — for 'rate', the constraint's own name
+    error.waitMs;  // how long waiting would have taken
+  }
+}
+```
+
+And read capacity without spending any:
+
+```ts
+const snapshot = limiter.inspect(credentialId);
+// {tracked, queued, inflight, waitingForCapacity, constraints: [{name, available, capacity, msUntilFull}]}
+```
+
+`inspect()` is free by contract: it never changes a future admission outcome or
+when it happens, which is what makes it safe in a health endpoint or a hot
+loop.
 
 ---
 

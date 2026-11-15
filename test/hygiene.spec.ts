@@ -98,6 +98,19 @@ describe('admission atomicity (S4)', () => {
     expect(code).not.toMatch(/\.then\(|Promise\./);
   });
 
+  it('keeps inspect.ts synchronous and free of writes to bucket state', () => {
+    // inspect() must never commit a refill. The one way that happens is an
+    // assignment into `partition.buckets`, so the read path must contain none.
+    const source = readFileSync(join(srcDir, 'inspect.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    expect(code).not.toMatch(/\bawait\b|\basync\b/);
+    expect(code).not.toMatch(/\.buckets\s*\[[^\]]*\]\s*=/);
+    expect(code).not.toMatch(/\bcommit\s*\(/);
+    // `acquire` would create a partition and run an eviction sweep.
+    expect(code).not.toMatch(/registry\.acquire/);
+  });
+
   it('keeps the modules admit.ts depends on synchronous too', () => {
     // An await reached indirectly is just as damaging as one written here.
     for (const module of ['bucket.ts', 'semaphore.ts', 'queue.ts']) {

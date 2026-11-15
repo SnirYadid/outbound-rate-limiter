@@ -160,11 +160,68 @@ A call that cannot start is queued, not refused. What that queue guarantees:
 
 | Condition | Outcome |
 |---|---|
-| No capacity yet | **Queued.** Waiting is the default. |
+| No capacity yet, `onSaturated: 'wait'` (default) | **Queued.** Waiting is the default. |
+| No capacity yet, `onSaturated: 'reject'` | Promise rejects, `QuotaPilotSaturatedError` |
 | `maxQueueDepth` reached for that key | Promise rejects, `QuotaPilotQueueFullError` |
 | `maxKeys` reached and nothing safe to evict | Promise rejects, `QuotaPilotKeyLimitError` |
 | `cost` above some constraint's `burst` | **Throws synchronously**, `QuotaPilotConfigError` — it could never be admitted, so waiting would be a hang |
 | Invalid configuration | **Throws synchronously**, `QuotaPilotConfigError` |
+
+### `onSaturated: 'reject'` — start now, or fail now
+
+A rejected call is **never queued**, so it holds no capacity, no concurrency
+slot and no timer, and its promise always settles. Branch on `kind`:
+
+| `kind` | What happened | Clears when |
+|---|---|---|
+| `'rate'` | A rate constraint had no capacity for this cost. `binding` names it, `waitMs` says how long `'wait'` would have taken. | Time passes |
+| `'concurrency'` | The limiter-wide `maxConcurrent` cap was full. | Another call finishes |
+| `'key-concurrency'` | This key's `maxConcurrentPerKey` cap was full. | One of THIS key's calls finishes |
+| `'queued-ahead'` | The key already had queued calls. | That key's backlog drains |
+
+`'queued-ahead'` exists because starting ahead of a backlog would break per-key
+FIFO, and that is not a theoretical concern: a cheap call can be admissible
+while an expensive queued call is not, so without this refusal a stream of
+cheap rejecting callers would starve the expensive one indefinitely.
+
+`binding` is a label for the message. For `'rate'` it is a declared constraint
+name; otherwise it names the option or condition responsible. **Branch on
+`kind`, never on `binding`** — a constraint could be named `maxConcurrent`.
+
+### Which constraint is reported as binding
+
+The one with the **longest** wait, since that is the one actually being waited
+on. Ties go to declaration order.
+
+---
+
+## `inspect()` — a snapshot that costs nothing
+
+```ts
+const snapshot = limiter.inspect('acct-1');
+// {key, tracked, queued, inflight, waitingForCapacity, constraints: [...]}
+```
+
+The invariant: **calling `inspect()` never changes a future admission outcome
+or when it happens.** Specifically it
+
+- consumes no capacity and commits no refill,
+- enqueues nothing and schedules no timer,
+- alters no eviction eligibility,
+- does not bring an unseen key into existence (`tracked: false`, with the
+  full-capacity figures such a key would start with),
+- and hands back frozen copies, so a caller cannot reach into live state.
+
+Proven differentially: identical schedules replayed with and without
+inspection at every step produce identical admission timelines.
+
+**Side-effect-free does not mean static.** Projected capacity tracks elapsed
+time, so two reads a moment apart legitimately differ — that is the projection
+working, not a mutation.
+
+`waitingForCapacity` distinguishes "this key's scheduler is asleep on the
+clock" from "it is waiting for other calls to finish", which are different
+operational problems.
 
 ---
 

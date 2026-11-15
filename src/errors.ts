@@ -17,6 +17,8 @@
  * refused", never "your request failed".
  */
 
+import type {SaturationKind} from './types.js';
+
 export interface QuotaPilotErrorDetails {
   /** The partition key the call was running under, when known. */
   readonly key?: string;
@@ -59,19 +61,36 @@ export class QuotaPilotConfigError extends QuotaPilotError {
   }
 }
 
-/** `onSaturated: 'reject'` and a constraint had no capacity. */
+/**
+ * `onSaturated: 'reject'` and the call could not start immediately.
+ *
+ * Branch on `kind`, not on `binding`. `binding` is a human-readable label for
+ * the message and is only a declared constraint name when `kind` is `'rate'`;
+ * for the other kinds it names the option or the condition responsible, which
+ * a constraint could in principle be named after.
+ */
 export class QuotaPilotSaturatedError extends QuotaPilotError {
-  /** How long the caller would have waited had it chosen `'wait'`. */
+  /** What stopped the call. The reliable discriminator. */
+  readonly kind: SaturationKind;
+  /**
+   * How long the caller would have waited had it chosen `'wait'`. Meaningful
+   * for `kind: 'rate'`; `0` elsewhere, where the wait depends on other calls
+   * finishing rather than on elapsed time.
+   */
   readonly waitMs: number;
-  /** Name of the constraint that bound. */
+  /**
+   * Label for what bound: the constraint's name for `'rate'`, the option name
+   * for the concurrency kinds, `'queue'` for `'queued-ahead'`.
+   */
   readonly binding: string;
 
   constructor(
     message: string,
-    info: QuotaPilotErrorDetails & {waitMs: number; binding: string}
+    info: QuotaPilotErrorDetails & {kind: SaturationKind; waitMs: number; binding: string}
   ) {
     super(message, info);
     this.name = 'QuotaPilotSaturatedError';
+    this.kind = info.kind;
     this.waitMs = info.waitMs;
     this.binding = info.binding;
   }

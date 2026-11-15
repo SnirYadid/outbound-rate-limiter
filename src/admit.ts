@@ -15,11 +15,6 @@
  *
  * A test asserts this file contains no `await`. Do not silence it.
  * ────────────────────────────────────────────────────────────────────────────
- *
- * Scope note: this is the Day 2 subset. It admits or reports what blocked.
- * Day 3 adds, without changing the shape above: per-call cost validation
- * against every constraint, `onSaturated: 'reject'`, the binding constraint's
- * name on the outcome for telemetry, and `inspect()`.
  */
 
 import {commit, peek, type BucketState} from './bucket.js';
@@ -40,9 +35,19 @@ export type AdmitOutcome =
   | {readonly admitted: true; readonly release: Release}
   | {
       readonly admitted: false;
-      readonly blockedBy: BlockedBy;
-      /** Milliseconds until capacity returns. Only meaningful for `'rate'`. */
+      readonly blockedBy: 'rate';
+      /** Milliseconds until the binding constraint can serve this cost. */
       readonly waitMs: number;
+      /**
+       * Name of the constraint that bound — the one with the LONGEST wait,
+       * since that is the one actually being waited on. Ties go to declaration
+       * order, which the caller controls and can reason about.
+       */
+      readonly binding: string;
+    }
+  | {
+      readonly admitted: false;
+      readonly blockedBy: 'slot' | 'key-concurrency';
     };
 
 export interface AdmitContext {
@@ -79,51 +84,56 @@ export function tryAdmit(
   const {constraints, semaphore, maxConcurrentPerKey} = context;
 
   if (partition.inflight >= maxConcurrentPerKey) {
-    return {admitted: false, blockedBy: 'key-concurrency', waitMs: 0};
+    return {admitted: false, blockedBy: 'key-concurrency'};
   }
 
   // Peek every constraint before taking anything. `refilled` is carried
   // forward so the commit below refills once rather than twice.
   const refilled: BucketState[] = [];
-  let worstWaitMs = 0;
+  let blocking: {readonly name: string; readonly waitMs: number} | undefined;
 
   for (let index = 0; index < constraints.length; index++) {
-    const constraint = constraints[index];
-    const bucket = partition.buckets[index];
-    /* c8 ignore next 3 -- buckets are built from the same list, index-aligned */
-    if (constraint === undefined || bucket === undefined) {
-      return {admitted: false, blockedBy: 'rate', waitMs: 1};
-    }
+    // Index-parallel by construction: `partition.buckets` is built by mapping
+    // over this exact constraint list (see createPartitionRegistry), and
+    // neither array is ever resized. Asserting that is honest; a guard here
+    // would be a branch no test could ever reach.
+    const constraint = constraints[index]!;
+    const bucket = partition.buckets[index]!;
 
     const result = peek(bucket, now, cost, constraint.spec);
     refilled.push(result.refilled);
-    if (!result.ok) {
-      // Every constraint must permit the call, so the wait is the longest of
-      // them. `unsatisfiable` (cost above capacity) cannot reach here: the
-      // limiter rejects that synchronously at `run()`.
-      worstWaitMs = Math.max(worstWaitMs, result.waitMs);
+
+    // Every constraint must permit the call, so the binding one is whichever
+    // makes us wait longest. Strict `>` keeps ties with the earlier-declared
+    // constraint, which makes the choice deterministic and explainable.
+    // `unsatisfiable` (cost above capacity) cannot reach here: the limiter
+    // rejects that synchronously at `run()`.
+    if (!result.ok && (blocking === undefined || result.waitMs > blocking.waitMs)) {
+      blocking = {name: constraint.name, waitMs: result.waitMs};
     }
   }
 
-  if (worstWaitMs > 0) {
+  if (blocking !== undefined) {
     // Writing the refilled buckets back is a pure clock advance — it consumes
     // nothing — and it saves re-deriving the same values on the next attempt.
     writeBack(partition, refilled);
-    return {admitted: false, blockedBy: 'rate', waitMs: worstWaitMs};
+    return {
+      admitted: false,
+      blockedBy: 'rate',
+      waitMs: blocking.waitMs,
+      binding: blocking.name,
+    };
   }
 
   const release = semaphore.tryAcquire();
   if (release === null) {
     writeBack(partition, refilled);
-    return {admitted: false, blockedBy: 'slot', waitMs: 0};
+    return {admitted: false, blockedBy: 'slot'};
   }
 
   for (let index = 0; index < constraints.length; index++) {
-    const constraint = constraints[index];
-    const bucket = refilled[index];
-    /* c8 ignore next */
-    if (constraint === undefined || bucket === undefined) continue;
-    partition.buckets[index] = commit(bucket, cost, constraint.spec);
+    // Same index-parallel invariant as above.
+    partition.buckets[index] = commit(refilled[index]!, cost, constraints[index]!.spec);
   }
 
   return {admitted: true, release};
@@ -131,9 +141,6 @@ export function tryAdmit(
 
 function writeBack(partition: Partition, refilled: readonly BucketState[]): void {
   for (let index = 0; index < refilled.length; index++) {
-    const bucket = refilled[index];
-    /* c8 ignore next */
-    if (bucket === undefined) continue;
-    partition.buckets[index] = bucket;
+    partition.buckets[index] = refilled[index]!;
   }
 }

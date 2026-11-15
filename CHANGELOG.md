@@ -70,3 +70,48 @@ exists and works, within the scope below.
 
 Retries, per-attempt timeouts, cancellation, telemetry events, `drain()`,
 `inspect()`, `onSaturated: 'reject'`, binding-constraint names on refusals.
+
+## 0.1.0-alpha.2 — unreleased
+
+Day 3 (M3): admission completion and introspection.
+
+### Added
+
+- **Binding constraint identification.** A rate refusal now names the
+  constraint responsible — the one with the longest wait, ties going to
+  declaration order.
+- **`QuotaPilotSaturatedError.kind`** (`SaturationKind`): `'rate' |
+  'concurrency' | 'key-concurrency' | 'queued-ahead'`. The reliable
+  discriminator; `binding` is a label and only names a declared constraint for
+  `'rate'`.
+- **`RunOptions.onSaturated`** (`'wait' | 'reject'`, default `'wait'`).
+  `'reject'` means start now or fail now: the call is never queued, so it holds
+  no capacity, no slot and no timer.
+- **`Limiter.inspect(key?)`** returning a frozen `KeySnapshot` with per-
+  constraint `ConstraintSnapshot`s. Side-effect-free by contract and proven
+  differentially.
+
+### Changed
+
+- `QuotaPilotSaturatedError` now **requires** `kind` in its constructor, so no
+  construction site can omit the discriminator. Breaking for anyone
+  constructing it directly; it is a refusal the library raises, so in practice
+  only the tests did.
+- `AdmitOutcome` (internal) is a discriminated union on `blockedBy`, so
+  `waitMs` and `binding` exist only where they are meaningful.
+- Replaced two `/* c8 ignore */` guards in `admit.ts` with non-null assertions
+  plus a comment stating the index-parallel invariant. Less code, two fewer
+  coverage exemptions, same safety.
+
+### Audited, deliberately unchanged
+
+The `cost` contract: finite, greater than zero, no greater than every
+constraint's `burst`, fractions allowed, violations throwing synchronously.
+Two findings left as they were, now pinned by tests — `cost: null` means "use
+the default" (`??`, exactly as `key` behaves), and the declared `burst` is the
+real boundary rather than `burst + TOKEN_EPSILON`.
+
+### Not yet implemented
+
+Retries, per-attempt timeouts, cancellation, telemetry events, `drain()`.
+See `docs/DAY4-PLAN.md`.

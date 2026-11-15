@@ -16,7 +16,7 @@ describe('error taxonomy', () => {
   it('every refusal is catchable as QuotaPilotError', () => {
     const errors = [
       new QuotaPilotConfigError('x'),
-      new QuotaPilotSaturatedError('x', {waitMs: 1, binding: 'b'}),
+      new QuotaPilotSaturatedError('x', {kind: 'rate', waitMs: 1, binding: 'b'}),
       new QuotaPilotQueueFullError('x'),
       new QuotaPilotKeyLimitError('x'),
       new QuotaPilotBudgetError('x'),
@@ -38,7 +38,7 @@ describe('error taxonomy', () => {
     expect(new QuotaPilotQueueFullError('x').name).toBe('QuotaPilotQueueFullError');
     expect(new QuotaPilotKeyLimitError('x').name).toBe('QuotaPilotKeyLimitError');
     expect(new QuotaPilotClosedError('x').name).toBe('QuotaPilotClosedError');
-    expect(new QuotaPilotSaturatedError('x', {waitMs: 1, binding: 'b'}).name).toBe(
+    expect(new QuotaPilotSaturatedError('x', {kind: 'rate', waitMs: 1, binding: 'b'}).name).toBe(
       'QuotaPilotSaturatedError'
     );
     expect(new QuotaPilotTimeoutError('x', {timeoutMs: 1}).name).toBe('QuotaPilotTimeoutError');
@@ -79,12 +79,35 @@ describe('error taxonomy', () => {
 
   it('exposes the saturation detail a caller needs to decide what to do', () => {
     const error = new QuotaPilotSaturatedError('no capacity', {
+      kind: 'rate',
       waitMs: 450,
       binding: 'per-second',
       key: 'k',
     });
+    expect(error.kind).toBe('rate');
     expect(error.waitMs).toBe(450);
     expect(error.binding).toBe('per-second');
+  });
+
+  it('carries a kind that discriminates independently of the binding label', () => {
+    // `binding` is a human-readable label and, for the concurrency kinds, names
+    // an OPTION — which a caller could in principle also name a constraint
+    // after. `kind` is the reliable discriminator, which is why the
+    // constructor requires it rather than inferring it.
+    const collision = new QuotaPilotSaturatedError('x', {
+      kind: 'concurrency',
+      waitMs: 0,
+      binding: 'maxConcurrent',
+    });
+    expect(collision.kind).toBe('concurrency');
+
+    const ratedSameLabel = new QuotaPilotSaturatedError('x', {
+      kind: 'rate',
+      waitMs: 10,
+      binding: 'maxConcurrent',
+    });
+    expect(ratedSameLabel.kind).toBe('rate');
+    expect(ratedSameLabel.binding).toBe(collision.binding);
   });
 
   it('carries no cause on a timeout, because the attempt produced no error', () => {

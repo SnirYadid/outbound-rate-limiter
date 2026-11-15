@@ -84,10 +84,84 @@ export interface RunOptions {
   /**
    * Units this call consumes from every constraint. Defaults to `1`.
    *
+   * Must be a finite number greater than zero. Fractional costs are allowed.
    * Must not exceed any constraint's `burst`, or it could never be admitted;
    * that is rejected synchronously rather than waited on.
    */
   readonly cost?: number;
+
+  /**
+   * What to do when the call cannot start immediately. Defaults to `'wait'`.
+   *
+   * `'wait'` queues the call and runs it when capacity arrives.
+   *
+   * `'reject'` means "start now or fail now": the call is never queued, so it
+   * holds no capacity, no slot and no timer. The returned promise rejects with
+   * `QuotaPilotSaturatedError`, whose `kind` says what stopped it.
+   *
+   * Note that `'reject'` also refuses when the key already has calls queued,
+   * reported as `kind: 'queued-ahead'`. Starting ahead of them would break
+   * per-key FIFO order, and a cheaper call genuinely can be admissible while a
+   * more expensive queued call is not.
+   */
+  readonly onSaturated?: 'wait' | 'reject';
+}
+
+/**
+ * What stopped a call under `onSaturated: 'reject'`.
+ *
+ * Each kind resolves differently, which is why they are distinguished:
+ * `'rate'` clears with the passage of time, the concurrency kinds clear when
+ * other calls finish, and `'queued-ahead'` clears when the key's own backlog
+ * drains.
+ */
+export type SaturationKind =
+  /** A rate constraint had no capacity for this cost. */
+  | 'rate'
+  /** The limiter-wide `maxConcurrent` cap was full. */
+  | 'concurrency'
+  /** This key's own `maxConcurrentPerKey` cap was full. */
+  | 'key-concurrency'
+  /** The key already had queued calls, and jumping them would break FIFO. */
+  | 'queued-ahead';
+
+/** One constraint's capacity, as of the moment `inspect()` was called. */
+export interface ConstraintSnapshot {
+  /** The constraint's configured name. */
+  readonly name: string;
+  /** Units available right now, after accounting for elapsed time. */
+  readonly available: number;
+  /** The constraint's `burst` — the most it can ever hold. */
+  readonly capacity: number;
+  /** Milliseconds until `available` reaches `capacity`. `0` when already full. */
+  readonly msUntilFull: number;
+}
+
+/**
+ * A point-in-time view of one key. Returned by `inspect()`.
+ *
+ * Everything here is a copy. Nothing in it references live internal state, and
+ * producing it changes nothing — see the `inspect()` contract.
+ */
+export interface KeySnapshot {
+  readonly key: string;
+  /**
+   * `false` when the limiter has never seen this key. The figures are then the
+   * hypothetical state it WOULD start in — full capacity, nothing queued —
+   * because inspecting a key must not bring it into existence.
+   */
+  readonly tracked: boolean;
+  /** Calls waiting for capacity under this key. */
+  readonly queued: number;
+  /** Calls started under this key and not yet settled. */
+  readonly inflight: number;
+  /**
+   * True when this key's scheduler is sleeping until rate capacity returns.
+   * Distinguishes "waiting on the clock" from "waiting on other calls".
+   */
+  readonly waitingForCapacity: boolean;
+  /** One entry per constraint, in declaration order. */
+  readonly constraints: readonly ConstraintSnapshot[];
 }
 
 export interface LimiterStats {
@@ -166,6 +240,19 @@ export interface Limiter {
 
   /** A point-in-time count of tracked keys, queued calls and running calls. */
   stats(): LimiterStats;
+
+  /**
+   * A side-effect-free snapshot of one key's capacity and scheduler state.
+   *
+   * The contract, and the reason this is safe to call from a health endpoint
+   * or a hot loop: **calling `inspect()` never changes a future admission
+   * outcome or when it happens.** It consumes no capacity, commits no refill,
+   * enqueues nothing, schedules no timer, alters no eviction eligibility, and
+   * does not bring an unseen key into existence.
+   *
+   * Defaults to the same key `run()` does (`''`).
+   */
+  inspect(key?: string): KeySnapshot;
 
   /**
    * Configuration that is legal but probably not what you meant — most often a

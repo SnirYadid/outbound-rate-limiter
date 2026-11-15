@@ -2,23 +2,37 @@
  * `createLimiter` — the wiring, and the only module that knows about all the
  * others.
  *
- * Day 2 scope: constraints, keyed partitioning with safe eviction, global and
- * per-key concurrency, bounded per-key FIFO queues. No retries, no per-attempt
- * timeouts, no cancellation, no telemetry events — those arrive in later
- * milestones and are additive to this surface.
+ * Scope so far: constraints, keyed partitioning with safe eviction, global and
+ * per-key concurrency, bounded per-key FIFO queues, the `onSaturated` policy
+ * and read-only inspection. No retries, no per-attempt timeouts, no
+ * cancellation, no telemetry events — those arrive in later milestones and are
+ * additive to this surface.
  */
 
+import {tryAdmit, type AdmitOutcome} from './admit.js';
 import {
   assertCostAdmissible,
   constraintWarnings,
   normalizeConstraints,
 } from './constraints.js';
-import {QuotaPilotConfigError, QuotaPilotQueueFullError} from './errors.js';
-import {createPartitionRegistry, type QueuedCall} from './partition.js';
+import {
+  QuotaPilotConfigError,
+  QuotaPilotQueueFullError,
+  QuotaPilotSaturatedError,
+} from './errors.js';
+import {inspectKey, type InspectContext} from './inspect.js';
+import {createPartitionRegistry, type Partition, type QueuedCall} from './partition.js';
 import {pump, type SchedulerContext} from './scheduler.js';
 import {createSemaphore} from './semaphore.js';
 import {realClock} from './time.js';
-import type {Limiter, LimiterOptions, LimiterStats, RunOptions} from './types.js';
+import type {
+  AttemptContext,
+  KeySnapshot,
+  Limiter,
+  LimiterOptions,
+  LimiterStats,
+  RunOptions,
+} from './types.js';
 
 /** Per-key queue bound. Deliberately finite: see queue.ts. */
 export const DEFAULT_MAX_QUEUE_DEPTH = 1_024;
@@ -66,9 +80,36 @@ export function createLimiter(options: LimiterOptions): Limiter {
   });
 
   const context: SchedulerContext = {constraints, semaphore, maxConcurrentPerKey, clock};
+  const inspectContext: InspectContext = {constraints, registry, clock};
+
+  /** Turns a refusal into the error the caller sees, with a usable message. */
+  const saturated = (
+    outcome: Extract<AdmitOutcome, {admitted: false}>,
+    key: string
+  ): QuotaPilotSaturatedError => {
+    const forKey = `for key ${JSON.stringify(key)}`;
+    if (outcome.blockedBy === 'rate') {
+      return new QuotaPilotSaturatedError(
+        `Rate constraint ${JSON.stringify(outcome.binding)} is saturated ${forKey}; ` +
+          `capacity returns in ${outcome.waitMs}ms.`,
+        {kind: 'rate', waitMs: outcome.waitMs, binding: outcome.binding, key}
+      );
+    }
+    if (outcome.blockedBy === 'slot') {
+      return new QuotaPilotSaturatedError(
+        `The limiter-wide concurrency cap (maxConcurrent = ${maxConcurrent}) is full ${forKey}.`,
+        {kind: 'concurrency', waitMs: 0, binding: 'maxConcurrent', key}
+      );
+    }
+    return new QuotaPilotSaturatedError(
+      `This key's concurrency cap (maxConcurrentPerKey = ${maxConcurrentPerKey}) is full ` +
+        `${forKey}.`,
+      {kind: 'key-concurrency', waitMs: 0, binding: 'maxConcurrentPerKey', key}
+    );
+  };
 
   return {
-    run<T>(fn: (ctx: {key: string; elapsedMs: number}) => T | Promise<T>, runOptions?: RunOptions) {
+    run<T>(fn: (ctx: AttemptContext) => T | Promise<T>, runOptions?: RunOptions) {
       if (typeof fn !== 'function') {
         throw new QuotaPilotConfigError('run() requires a function to execute.');
       }
@@ -83,6 +124,14 @@ export function createLimiter(options: LimiterOptions): Limiter {
       // programming error, and it should fail where it was written rather than
       // becoming a promise that never settles.
       assertCostAdmissible(cost, constraints);
+
+      const onSaturated = runOptions?.onSaturated ?? 'wait';
+      if (onSaturated !== 'wait' && onSaturated !== 'reject') {
+        throw new QuotaPilotConfigError(
+          `run() onSaturated must be 'wait' or 'reject', received ` +
+            `${JSON.stringify(onSaturated)}.`
+        );
+      }
 
       return new Promise<T>((resolve, reject) => {
         // `acquire` throws when the registry is full and nothing is safe to
@@ -146,6 +195,11 @@ export function createLimiter(options: LimiterOptions): Limiter {
           },
         };
 
+        if (onSaturated === 'reject') {
+          rejectOrStart(partition, call, key, reject);
+          return;
+        }
+
         if (!partition.queue.enqueue(call)) {
           reject(
             new QuotaPilotQueueFullError(
@@ -168,8 +222,59 @@ export function createLimiter(options: LimiterOptions): Limiter {
       inflight: registry.totalInflight(),
     }),
 
+    inspect: (key = ''): KeySnapshot => {
+      if (typeof key !== 'string') {
+        throw new QuotaPilotConfigError(
+          `inspect() key must be a string, received ${JSON.stringify(key)}.`
+        );
+      }
+      return inspectKey(key, inspectContext);
+    },
+
     warnings,
   };
+
+  /**
+   * `onSaturated: 'reject'` — start now, or fail now.
+   *
+   * The call is NEVER enqueued on this path, so there is nothing to leak: no
+   * queue entry, no timer, no slot, and the promise always settles here.
+   *
+   * A non-empty queue is an automatic refusal. Admitting ahead of it would
+   * break per-key FIFO, and this is not hypothetical: a cheap call can be
+   * admissible while a more expensive queued call is not, so without this
+   * check a stream of small `'reject'` calls could starve a large queued one
+   * indefinitely.
+   */
+  function rejectOrStart(
+    partition: Partition,
+    call: QueuedCall,
+    key: string,
+    reject: (error: unknown) => void
+  ): void {
+    if (!partition.queue.isEmpty) {
+      reject(
+        new QuotaPilotSaturatedError(
+          `Key ${JSON.stringify(key)} already has ${partition.queue.size} call(s) queued. ` +
+            'Rejecting rather than starting ahead of them, which would break FIFO order.',
+          {kind: 'queued-ahead', waitMs: 0, binding: 'queue', key}
+        )
+      );
+      return;
+    }
+
+    const outcome = tryAdmit(partition, call.cost, clock.now(), context);
+    if (!outcome.admitted) {
+      // Nothing was taken (S5), so there is nothing to undo.
+      reject(saturated(outcome, key));
+      return;
+    }
+
+    // Same order the pump uses: count in before starting, so a call that
+    // settles synchronously sees consistent state.
+    partition.inflight++;
+    call.start(outcome.release);
+  }
 }
 
 /** A positive integer, or `Infinity` to mean "no limit". */

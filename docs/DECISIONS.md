@@ -321,3 +321,103 @@ every constraint, `onSaturated: 'reject'`, the binding constraint's name on the
 outcome for telemetry, and `inspect()`. The no-`await` invariant is already
 enforced by a test, so Day 3 inherits the proof rather than having to establish
 it.
+
+---
+
+# Day 3 decisions
+
+## D29 — The binding constraint is the one with the longest wait
+
+A refusal names one constraint. When several are out of capacity, the honest
+answer is the one that will keep you waiting longest — naming a faster one
+sends an operator to tune the wrong knob.
+
+Ties go to **declaration order**. Ties are common rather than exotic (waits are
+whole milliseconds), so the rule has to be stated: strict `>` when comparing, so
+the earliest-declared constraint wins. Declaration order is something the caller
+controls and can reason about, which is what makes the choice explainable rather
+than merely deterministic.
+
+## D30 — `QuotaPilotSaturatedError.kind`, and why `binding` is not enough
+
+`binding` is a human-readable label. For `'rate'` it is a declared constraint
+name; for the concurrency kinds it names the OPTION responsible
+(`maxConcurrent`, `maxConcurrentPerKey`) — and nothing stops a caller naming a
+constraint `maxConcurrent`.
+
+So `kind` is the discriminator and is **required** by the constructor: a
+construction site cannot forget it. `SaturationKind` is public because callers
+branch on it, and each kind clears for a different reason — time, other calls
+finishing, or the key's own backlog draining.
+
+## D31 — `onSaturated: 'reject'` refuses when the key has a backlog
+
+Reported as `kind: 'queued-ahead'`.
+
+This is load-bearing, not defensive. A cheap call genuinely can be admissible
+while an expensive queued call is not: drain a burst-10 bucket, queue a cost-10
+call, wait 300 ms, and a cost-1 call now fits. Admitting it would jump the queue
+AND push the expensive call further out. A stream of cheap rejecting callers
+would starve it indefinitely.
+
+The alternative — attempt admission and ignore the queue — was rejected for that
+reason. `'reject'` therefore means "start now **without reordering anything**,
+or fail now". A rejected call is never enqueued, so it holds no capacity, no
+slot and no timer, and its promise always settles.
+
+## D32 — `inspect()` reads with `get`, never `acquire`
+
+`registry.acquire` creates on miss, runs an eviction sweep, and can throw
+`QuotaPilotKeyLimitError`. All three are side effects, so the read path uses
+`registry.get` and synthesises a full-capacity snapshot for an unseen key,
+flagged `tracked: false`.
+
+The other half of the invariant: admission writes refilled buckets back as an
+optimisation, and inspection must **not**. `refill` returns new state rather
+than mutating, so reading the projection is free as long as nothing assigns it
+back. A hygiene test asserts `inspect.ts` contains no assignment into
+`buckets[...]`, no `commit(`, and no `registry.acquire`.
+
+Proof is differential, like eviction's: identical schedules replayed with and
+without inspection at every step must produce identical admission timelines.
+
+Note the distinction the real-clock smoke test made concrete: side-effect-free
+does **not** mean static. Projected capacity must track elapsed time, so on a
+real clock it grows between two reads. Only the virtual-clock suite can assert
+exact equality; the real-clock check asserts capacity is non-decreasing and
+never exceeds its ceiling.
+
+## D33 — Index-parallel arrays are asserted, not guarded
+
+`partition.buckets` is built by mapping over the limiter's constraint list and
+neither array is ever resized, so `buckets[i]` and `constraints[i]` always
+correspond. Under `noUncheckedIndexedAccess` that needs either a guard or an
+assertion.
+
+Day 2 used guards, which produced branches no test could reach and therefore two
+`/* c8 ignore */` directives. Day 3 replaced them with non-null assertions and a
+comment stating the invariant. An ignored branch is an untested branch wearing a
+disguise; an assertion is a documented invariant. Net effect: less code, two
+fewer coverage exemptions, and the same safety.
+
+## D34 — The `cost` contract was audited, not changed
+
+Established semantics, now pinned by tests rather than by implication: a finite
+number greater than zero, no greater than every constraint's `burst`, fractions
+allowed, violations throwing **synchronously** from `run()`.
+
+Two findings came out of writing those tests, and both were left as they are:
+
+- **`cost: null` means "use the default"**, because `cost` is defaulted with
+  `??` — exactly as `key` is. Rejecting `null` while accepting `undefined` would
+  be inconsistent with every other option and would add a restriction the
+  contract never had. A TS caller cannot write either (strict optional types),
+  so this only concerns untyped JavaScript.
+- **The declared `burst` is the real boundary**, not `burst + TOKEN_EPSILON`.
+  The bucket's 1e-9 comparison tolerance exists so a float a hair short of the
+  cost does not stall forever; it is not an extension of the limit the caller
+  declared. A cost above `burst` is refused even within that tolerance.
+
+Also pinned because it reads like a bug and is not one: `10 + Number.EPSILON`
+**is** exactly `10` as a double — the spacing between representable values near
+10 is about 1.8e-15, roughly eight times `EPSILON` — so that cost is admitted.
