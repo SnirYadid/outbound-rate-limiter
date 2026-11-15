@@ -1,6 +1,6 @@
 {
   "name": "quota-pilot",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "Outbound API rate limiting, scheduling and retries for Node. Multi-constraint weighted token buckets with deterministic tests.",
   "keywords": [
     "rate-limit",

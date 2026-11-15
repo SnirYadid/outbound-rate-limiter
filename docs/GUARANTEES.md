@@ -140,6 +140,34 @@ derived from a request id, for instance, rather than from a credential.
 
 ---
 
+## Queueing, fairness and concurrency
+
+A call that cannot start is queued, not refused. What that queue guarantees:
+
+| | Guarantee |
+|---|---|
+| **Q1** | Within one key, calls start in arrival order. Strict FIFO, no reordering. |
+| **Q2** | Keys are independent. A saturated key never delays a key with capacity. |
+| **Q3** | Where keys compete — the global `maxConcurrent` cap — slots are handed out in the order keys became capacity-eligible. A busy key cannot starve a quiet one. |
+| **Q4** | There is **no** ordering guarantee *between* keys beyond Q3. Each key progresses on its own. |
+| **Q5** | `maxConcurrent` bounds calls running across all keys; `maxConcurrentPerKey` bounds them within one key. Both are respected simultaneously. |
+| **Q6** | A concurrency slot is released exactly once per call, on success, on a thrown error, and on a rejected promise alike. |
+| **Q7** | Each key's queue is bounded by `maxQueueDepth`. Exceeding it rejects the returned promise with `QuotaPilotQueueFullError`, naming the key — it never grows without bound. |
+| **Q8** | No polling. Every stop has exactly one matching wake: a timer for rate, the semaphore's waiter list for a slot, a call's own completion for per-key concurrency, the next enqueue for an empty queue. |
+| **Q9** | Liveness: if your tasks settle, every queued call eventually runs or rejects, every queue drains, and no timer is left behind. |
+
+### What refuses, and how
+
+| Condition | Outcome |
+|---|---|
+| No capacity yet | **Queued.** Waiting is the default. |
+| `maxQueueDepth` reached for that key | Promise rejects, `QuotaPilotQueueFullError` |
+| `maxKeys` reached and nothing safe to evict | Promise rejects, `QuotaPilotKeyLimitError` |
+| `cost` above some constraint's `burst` | **Throws synchronously**, `QuotaPilotConfigError` — it could never be admitted, so waiting would be a hang |
+| Invalid configuration | **Throws synchronously**, `QuotaPilotConfigError` |
+
+---
+
 ## Guarantees conditional on cooperative cancellation
 
 `attemptTimeoutMs` aborts the `AbortSignal` handed to your function and stops

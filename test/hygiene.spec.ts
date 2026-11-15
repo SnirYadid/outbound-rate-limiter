@@ -83,6 +83,31 @@ describe('determinism seams', () => {
   });
 });
 
+describe('admission atomicity (S4)', () => {
+  it('keeps admit.ts free of await, async and promise handling', () => {
+    // The invariant the whole design rests on: the capacity check and the
+    // commit share one synchronous turn, so no other code can run between
+    // them and partial consumption is unrepresentable. One `await` here and
+    // two callers can both observe capacity and both commit, with no test
+    // failing — the race needs a specific interleaving to show up.
+    const source = readFileSync(join(srcDir, 'admit.ts'), 'utf8');
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+
+    expect(code).not.toMatch(/\bawait\b/);
+    expect(code).not.toMatch(/\basync\b/);
+    expect(code).not.toMatch(/\.then\(|Promise\./);
+  });
+
+  it('keeps the modules admit.ts depends on synchronous too', () => {
+    // An await reached indirectly is just as damaging as one written here.
+    for (const module of ['bucket.ts', 'semaphore.ts', 'queue.ts']) {
+      const source = readFileSync(join(srcDir, module), 'utf8');
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+      expect(code, `${module} must stay synchronous`).not.toMatch(/\bawait\b|\basync\b/);
+    }
+  });
+});
+
 describe('test-suite determinism', () => {
   it('confines real time to the one suite that tests the platform clock', () => {
     // The whole suite must be able to run at full speed with no wall-clock
@@ -125,15 +150,27 @@ describe('public surface', () => {
       'QuotaPilotSaturatedError',
       'QuotaPilotTimeoutError',
       'VERSION',
+      'createLimiter',
       'createSeededRandom',
       'defaultRandom',
       'realClock',
     ]);
   });
 
-  it('does not export bucket or constraint internals', () => {
+  it('does not export bucket, constraint or scheduler internals', () => {
     const names = Object.keys(publicApi);
-    for (const internal of ['peek', 'commit', 'refill', 'normalizeConstraints', 'createBucket']) {
+    for (const internal of [
+      'peek',
+      'commit',
+      'refill',
+      'normalizeConstraints',
+      'createBucket',
+      'createSemaphore',
+      'createPartitionRegistry',
+      'tryAdmit',
+      'pump',
+      'BoundedFifo',
+    ]) {
       expect(names).not.toContain(internal);
     }
   });

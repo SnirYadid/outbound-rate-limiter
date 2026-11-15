@@ -143,6 +143,9 @@ Per key, not per limiter: a single global queue head-of-line-blocks a free key
 behind a saturated one. One pump per key means only the head waiter attempts
 admission, which removes the thundering herd that sleep-and-retry would create.
 
+Superseded in detail by **D22**, which states the cross-key guarantee precisely
+now that it is implemented.
+
 ## D13 — Telemetry cannot corrupt the scheduler
 
 Emitted after the commit, never inside it. Events are frozen. The hook is
@@ -203,3 +206,118 @@ elapsed, so an injected wall clock stalls rather than inflating.
 - **O4** Lint-enforced layering (`import/no-cycle`, per-layer
   `no-restricted-imports`). The hygiene test covers the globals rule today;
   the cycle rule is not yet enforced.
+
+---
+
+# Day 2 decisions
+
+## D19 — Rate state is per key, and that buys more than isolation
+
+Buckets are never shared between keys. The consequence the scheduler leans on:
+**within one key, available capacity only ever grows with time.** No other key
+can take it.
+
+That is why the pump never re-checks rate capacity after waiting for a
+concurrency slot, and therefore why admission needs no retry loop and cannot
+spin. Remove the isolation and that reasoning collapses.
+
+## D20 — `tryAcquire`, not `acquire(): Promise`
+
+The semaphore's acquisition is synchronous and returns `null` on refusal. A
+promise-returning `acquire` would force an `await` into the middle of
+admission, which is precisely the rework Day 3 must not need (D2).
+
+## D21 — Check order: per-key concurrency, rate, slot, commit
+
+Cheapest and least destructive first, so a refusal never has to undo anything.
+Only step 3 has a side effect, and if it fails nothing has been consumed.
+
+Rate before slot, specifically: acquiring a slot first would let a
+rate-saturated key sit on concurrency it cannot use, starving keys that could.
+
+Step 4 cannot fail, because steps 2 and 3 share one synchronous turn — the
+clock has not moved and, by D19, nothing else could have touched these buckets.
+
+## D22 — One FIFO queue and one pump per key
+
+Per key, not per limiter. A single global queue would head-of-line block a free
+key behind a saturated one, which is the opposite of what partitioning is for.
+
+**Cross-key fairness, stated precisely:** there is no ordering guarantee
+*between* keys; each key progresses independently. Where keys do compete — the
+global concurrency cap — slots are handed out in the order keys became
+capacity-eligible, via the semaphore's FIFO waiter list. So a busy key cannot
+starve a quiet one, and within a key order is strict arrival order.
+
+## D23 — Every stop has exactly one matching wake
+
+The pump admits what it can, then stops and records what it is waiting for:
+
+| Blocked by | Woken by |
+|---|---|
+| `rate` | a timer set for exactly the wait the bucket reported |
+| `slot` | the semaphore's FIFO waiter list |
+| `key-concurrency` | completion of one of that key's own calls |
+| nothing (queue empty) | the next enqueue |
+
+No polling, no periodic tick, no busy loop. A spurious wake is always safe —
+the pump simply re-attempts.
+
+Lost wake-ups are prevented structurally rather than with a lock: the stop and
+the registration happen in the SAME synchronous turn as the failed admission,
+so on a single-threaded loop nothing can slip between them.
+
+## D24 — At most one wake timer per partition
+
+A second request is a no-op, not a replacement. Only the pump schedules these,
+only one pump runs per partition, and a FIFO head cannot change while it is
+rate-blocked — so a pending timer is always for the same wait.
+
+## D25 — Eviction is driven by a sweep interval, with a forced sweep when full
+
+The default interval is the longest time any constraint needs to refill from
+empty: the soonest a drained partition could possibly become disposable, so
+sweeping more often cannot find anything the last sweep missed.
+
+`sweepIntervalMs` is a public option. It is also what makes the differential
+eviction test exercise real behaviour rather than a test-only hook.
+
+Being at `maxKeys` forces a sweep regardless of the interval. Turning a caller
+away while disposable partitions sit in the map is a missed cleanup, not a
+limit.
+
+## D26 — Queue saturation is a rejection, not a throw
+
+`maxQueueDepth` is per key. Exceeding it rejects the returned promise with
+`QuotaPilotQueueFullError`, naming the key. It is a rejection rather than a
+synchronous throw because by that point the caller holds a promise, and mixing
+sync throws with rejections from one call site is worse than either alone.
+
+Configuration errors remain synchronous throws — those are programming
+mistakes, not runtime conditions.
+
+## D27 — Capacity is committed in the same turn the task is invoked
+
+There is no `await` between the commit and calling the user's function, which
+is the contract Day 1 documented. The cost is bounded recursion: a task that
+throws synchronously re-pumps from inside its own stack frame, so a chain of
+synchronous failures across N keys nests N deep. Measured fine at 250 keys and
+tested there.
+
+The alternative — deferring invocation by a microtask — would keep the
+atomicity guarantee (capacity is already committed and the slot held) and flatten
+the stack. It was not taken because it contradicts a documented Day 1 contract
+for a problem nobody has hit. If deep recursion ever bites, a trampoline in
+`finish` is the fix.
+
+## D28 — Day 2 necessarily contains a working synchronous admission step
+
+A queue has nothing to wait on without one. `admit.ts` holds the Day 2 subset:
+all-or-nothing check-and-consume across every constraint, reporting what
+blocked and for how long.
+
+Day 3 EXTENDS it rather than replacing it: per-call cost validation against
+every constraint, `onSaturated: 'reject'`, the binding constraint's name on the
+outcome for telemetry, and `inspect()`. The no-`await` invariant is already
+enforced by a test, so Day 3 inherits the proof rather than having to establish
+it.

@@ -16,23 +16,36 @@ npm install quota-pilot
 
 ---
 
-## Status: 0.1.0-alpha — foundation only
+## Status: 0.1.0-alpha — scheduling works, retries do not yet
 
-This release is the foundation layer, published early so the packaging and the
-guarantees can be reviewed before the scheduler exists.
+**Available now:** multi-constraint weighted token buckets, per-key
+partitioning with provably safe eviction, global and per-key concurrency caps,
+bounded per-key FIFO queues with documented cross-key fairness, and the full
+error taxonomy.
 
-**Available now:** the weighted token bucket (internal), constraint validation,
-the clock and randomness seams, and the full error taxonomy.
+**Not here yet:** retries and backoff, per-attempt timeouts, cancellation via
+`AbortSignal`, telemetry events, and `drain()`. Each is an additive change to
+the surface below — types describing unbuilt behaviour are deliberately *not*
+exported, because a published type is a promise.
 
-**Not here yet:** `createLimiter`, the queue, the concurrency cap, and the
-retry engine. They land across the next six milestones. Nothing currently
-exported is expected to change shape when they arrive — types describing
-unbuilt behaviour are deliberately *not* exported, because a published type is
-a promise.
+```ts
+import {createLimiter} from 'quota-pilot';
 
-So there is no useful end-to-end example to show yet. There is a precise
-statement of what the thing will guarantee, which is the part worth getting
-right first.
+const limiter = createLimiter({
+  constraints: [
+    {name: 'burst', limit: 5, interval: 'second'},
+    {name: 'sustained', limit: 100, interval: 'minute'},
+  ],
+  maxConcurrent: 8,
+});
+
+// Queued if there is no capacity; never refused for being early.
+const rows = await limiter.run(() => fetchPage(url), {key: credentialId});
+```
+
+Each `key` holds entirely separate capacity, so one busy account cannot slow
+another. `cost` lets a call consume more than one unit, for providers that
+price requests in credits.
 
 ---
 
@@ -70,13 +83,19 @@ library that ships them ships stale facts and invites blind trust. You declare
 your constraints; the README shows you how to read a provider's wording into
 them.
 
-**No built-in error classification.** You supply a `classify` function. The
-core contains no status codes, no header names and no `Retry-After` parsing.
-Example classifiers live in `examples/` as code to copy and own.
+**No built-in error classification.** When retries land, you will supply a
+`classify` function; the core will contain no status codes, no header names and
+no `Retry-After` parsing. Example classifiers will ship as code to copy and
+own, never as an import.
 
 **Honest guarantees.** One quantitative claim, stated formally, with a table of
 what it does *not* cover — including the fact that `burst: 1` only gives strict
 rolling-window behaviour when every call costs the same.
+
+**Fairness that is written down.** Strict FIFO within a key; keys independent
+of each other; contested concurrency slots handed out in the order keys became
+eligible. See [docs/GUARANTEES.md](docs/GUARANTEES.md), "Queueing, fairness and
+concurrency".
 
 **Deterministic by construction.** The clock and the randomness are injected,
 and the library names `Date.now`, `setTimeout` and `Math.random` in exactly two

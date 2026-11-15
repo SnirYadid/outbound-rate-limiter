@@ -56,7 +56,15 @@ try {
   writeFileSync(
     join(esmDir, 'check.mjs'),
     `import assert from 'node:assert/strict';
-import {VERSION, QuotaPilotConfigError, QuotaPilotError, createSeededRandom, realClock} from 'quota-pilot';
+import {
+  VERSION,
+  QuotaPilotConfigError,
+  QuotaPilotError,
+  QuotaPilotQueueFullError,
+  createLimiter,
+  createSeededRandom,
+  realClock,
+} from 'quota-pilot';
 
 assert.equal(typeof VERSION, 'string', 'VERSION should be a string');
 assert.ok(new QuotaPilotConfigError('x') instanceof QuotaPilotError, 'error hierarchy');
@@ -64,8 +72,49 @@ assert.equal(new QuotaPilotConfigError('x').name, 'QuotaPilotConfigError');
 assert.equal(createSeededRandom(1)(), createSeededRandom(1)(), 'seeded random is reproducible');
 assert.equal(typeof realClock.now(), 'number');
 assert.ok(realClock.now() > 0, 'monotonic clock should be positive');
-const cancel = realClock.setTimer(() => {}, 5);
-cancel();
+realClock.setTimer(() => {}, 5)();
+
+// The real surface a consumer uses, on a real clock.
+const limiter = createLimiter({
+  constraints: [{name: 'burst', limit: 3, interval: 'second'}],
+  maxConcurrent: 2,
+});
+assert.deepEqual(limiter.warnings, []);
+
+const started = [];
+const results = await Promise.all(
+  [0, 1, 2].map((i) =>
+    limiter.run(async (ctx) => {
+      started.push(ctx.key);
+      return i * 2;
+    }, {key: 'acct', cost: 1})
+  )
+);
+assert.deepEqual(results, [0, 2, 4], 'all three calls resolved in order');
+assert.deepEqual(started, ['acct', 'acct', 'acct'], 'context carried the key');
+assert.deepEqual(limiter.stats(), {keys: 1, queued: 0, inflight: 0}, 'drained cleanly');
+
+// A cost no constraint can admit fails synchronously, not as a rejection.
+assert.throws(() => limiter.run(() => 1, {cost: 99}), QuotaPilotConfigError);
+
+// The limiter waits rather than refusing: a 4th call on a 3/second limit is
+// queued and still resolves.
+const paced = createLimiter({constraints: [{name: 'p', limit: 50, interval: 'second', burst: 1}]});
+const t0 = Date.now();
+await Promise.all([paced.run(() => 'a'), paced.run(() => 'b')]);
+assert.ok(Date.now() - t0 >= 10, 'the second call waited for capacity');
+
+// Queue bound is enforced and reported as its own error type.
+const tiny = createLimiter({
+  constraints: [{name: 'p', limit: 1, interval: 'minute', burst: 1}],
+  maxQueueDepth: 1,
+});
+const held = tiny.run(() => new Promise((r) => realClock.setTimer(r, 20)));
+const queued = tiny.run(() => 'queued').catch(() => 'rejected');
+await assert.rejects(() => tiny.run(() => 'overflow'), QuotaPilotQueueFullError);
+void held;
+void queued;
+
 console.log('esm ok, version', VERSION);
 `
   );
@@ -77,12 +126,34 @@ console.log('esm ok, version', VERSION);
   writeFileSync(
     join(cjsDir, 'check.cjs'),
     `const assert = require('node:assert/strict');
-const {VERSION, QuotaPilotConfigError, QuotaPilotError, createSeededRandom} = require('quota-pilot');
+const {
+  VERSION,
+  QuotaPilotConfigError,
+  QuotaPilotError,
+  createLimiter,
+  createSeededRandom,
+} = require('quota-pilot');
 
 assert.equal(typeof VERSION, 'string');
 assert.ok(new QuotaPilotConfigError('x') instanceof QuotaPilotError);
 assert.equal(createSeededRandom(2)(), createSeededRandom(2)());
-console.log('cjs ok, version', VERSION);
+
+(async () => {
+  const limiter = createLimiter({
+    constraints: [{name: 'burst', limit: 5, interval: 'second'}],
+    maxConcurrentPerKey: 1,
+  });
+  const out = await Promise.all([
+    limiter.run(() => 'one', {key: 'k'}),
+    limiter.run(async () => 'two', {key: 'k'}),
+  ]);
+  assert.deepEqual(out, ['one', 'two']);
+  assert.equal(limiter.stats().inflight, 0);
+  console.log('cjs ok, version', VERSION);
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
 `
   );
   log(`cjs:       ${run('node', ['check.cjs'], cjsDir).trim()}`);
@@ -92,13 +163,18 @@ console.log('cjs ok, version', VERSION);
   installFixture(typesDir, tarball, {type: 'module'});
   writeFileSync(
     join(typesDir, 'check.ts'),
-    `import {QuotaPilotConfigError, VERSION} from 'quota-pilot';
-import type {RateConstraint} from 'quota-pilot';
+    `import {createLimiter, QuotaPilotConfigError, VERSION} from 'quota-pilot';
+import type {AttemptContext, Limiter, LimiterOptions, RateConstraint, RunOptions} from 'quota-pilot';
 
 const constraint: RateConstraint = {name: 'per-second', limit: 10, interval: 'second'};
+const options: LimiterOptions = {constraints: [constraint], maxConcurrent: 4};
+const limiter: Limiter = createLimiter(options);
+const runOptions: RunOptions = {key: 'acct', cost: 2};
+const pending: Promise<number> = limiter.run((ctx: AttemptContext) => ctx.elapsedMs, runOptions);
+const warnings: readonly string[] = limiter.warnings;
 const version: string = VERSION;
 const error: Error = new QuotaPilotConfigError('nope');
-export {constraint, version, error};
+export {constraint, limiter, pending, warnings, version, error};
 `
   );
   writeFileSync(
