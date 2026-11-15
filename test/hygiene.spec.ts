@@ -53,6 +53,81 @@ describe('dependency hygiene', () => {
   });
 });
 
+describe('published documentation consistency', () => {
+  /**
+   * Doc comments on the public surface had drifted four separate times: the
+   * `run()` tooltip still said "There are no retries in this release", and
+   * `attemptTimeoutMs` still said the AbortSignal story had not arrived. Both
+   * shipped in the `.d.ts` and both were wrong by three milestones.
+   *
+   * These two tests are deliberately NARROW. A broad scanner for words like
+   * "later" or "in this release" would reject legitimate prose — the reserved
+   * `strategy` field honestly says only `'bucket'` exists in this release, and
+   * DECISIONS.md is full of historical reasoning that must stay. So:
+   *
+   *   - only the two files that ship as the public contract are scanned,
+   *   - only `/** ... *\/` doc comments, not `//` notes about history,
+   *   - and only phrases that assert a shipped feature is ABSENT.
+   */
+
+  /** The two files whose doc comments become the published `.d.ts`. */
+  const publicSurface = ['index.ts', 'types.ts'];
+
+  /** Phrases that can only be wrong once a feature exists. */
+  const staleClaims = [
+    /\bnot (?:here|implemented|available|supported) yet\b/i,
+    /\bno (?:retries|timeouts|cancellation|telemetry)\b[^.]*\bin this release\b/i,
+    /\bthere are no retries\b/i,
+    /\bthose arrive\b/i,
+    /\barrives with cancellation\b/i,
+    /\blater milestone\b/i,
+    /\bscope so far\b/i,
+    /\bNOT yet implemented\b/i,
+    /\bDay [1-7]\b/,
+  ];
+
+  const docComments = (path: string): string[] =>
+    readFileSync(path, 'utf8').match(/\/\*\*[\s\S]*?\*\//g) ?? [];
+
+  it('makes no claim that a shipped feature is missing', () => {
+    const offences: string[] = [];
+
+    for (const file of publicSurface) {
+      for (const comment of docComments(join(srcDir, file))) {
+        for (const claim of staleClaims) {
+          const found = claim.exec(comment);
+          if (found !== null) offences.push(`${file}: ${found[0]}`);
+        }
+      }
+    }
+
+    expect(offences).toEqual([]);
+  });
+
+  it('documents every shipped option on the surface that declares it', () => {
+    // The other half of the problem: a doc comment can be stale by omission.
+    // Each feature below is part of the public API, so each must be named in
+    // the doc comments a consumer reads on hover — not merely declared.
+    const prose = publicSurface
+      .flatMap((file) => docComments(join(srcDir, file)))
+      .join('\n');
+
+    for (const feature of [
+      'retry',
+      'attemptTimeoutMs',
+      'totalBudgetMs',
+      'AbortSignal',
+      'onDecision',
+      'drain',
+      'inspect',
+      'onSaturated',
+      'maxConcurrent',
+    ]) {
+      expect(prose, `${feature} is public but undocumented`).toContain(feature);
+    }
+  });
+});
+
 describe('determinism seams', () => {
   it('names Date.now and setTimeout only in time.ts', () => {
     const offenders = sourceFiles(srcDir)

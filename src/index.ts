@@ -1,17 +1,20 @@
 /**
  * QuotaPilot — outbound API rate limiting, scheduling and retries for Node.
  *
- * This release (0.1.0-alpha) covers constraints, keyed partitioning with safe
- * eviction, global and per-key concurrency, and bounded per-key FIFO queueing.
- * Retries, per-attempt timeouts, cancellation and telemetry events are not
- * here yet; each is an additive change to the surface below.
+ * The surface below is everything this release line offers: multi-constraint
+ * weighted token buckets, keyed partitioning with provably safe eviction,
+ * global and per-key concurrency caps, bounded per-key FIFO queueing,
+ * classified retries with backoff and provider wait hints, per-attempt
+ * timeouts, total budgets, `AbortSignal` cancellation, decision telemetry,
+ * `drain()` and `inspect()`.
  *
- * Types describing behaviour that is NOT yet implemented are deliberately
- * unexported, so this surface is a promise the release can actually keep.
+ * Nothing is exported that is not implemented, and nothing implemented is
+ * hidden. The feature set is frozen for 0.1.x.
  *
  * Scope, stated once here and again on the first screen of the README:
  * QuotaPilot bounds outbound traffic from ONE Node process. Run N instances
- * and your real ceiling is N times what you configured.
+ * and your real ceiling is N times what you configured. See
+ * docs/GUARANTEES.md for what that does and does not promise.
  */
 
 export const VERSION = '0.1.0-alpha.5';

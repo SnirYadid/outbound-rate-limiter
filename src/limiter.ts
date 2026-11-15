@@ -2,11 +2,18 @@
  * `createLimiter` — the wiring, and the only module that knows about all the
  * others.
  *
- * Scope so far: constraints, keyed partitioning with safe eviction, global and
- * per-key concurrency, bounded per-key FIFO queues, the `onSaturated` policy
- * and read-only inspection. No retries, no per-attempt timeouts, no
- * cancellation, no telemetry events — those arrive in later milestones and are
- * additive to this surface.
+ * It owns three things and delegates everything else:
+ *
+ *   1. Validating configuration, at construction and on every `run()`. A
+ *      mistake throws here, synchronously, before any promise exists.
+ *   2. Composing the parts — constraint set, partition registry, semaphore,
+ *      emitter — and handing each call the narrow slice it needs.
+ *   3. Intake policy: whether a call that cannot start immediately is queued
+ *      or refused, and which error a refusal becomes.
+ *
+ * Capacity arithmetic lives in `bucket`, admission in `admit`, queue draining
+ * in `scheduler`, one call's lifetime in `call`. This module deliberately
+ * contains no scheduling logic of its own.
  */
 
 import {tryAdmit, type AdmitOutcome} from './admit.js';

@@ -72,6 +72,37 @@ try {
     }
   }
 
+  // The declarations are what a consumer's editor shows on hover, and they are
+  // generated rather than written, so a stale doc comment in `src/` reaches
+  // them without anyone rereading it. A test checks the sources; this checks
+  // what actually ships, for both module formats.
+  const staleDocClaims = [
+    /\bnot (?:here|implemented|available|supported) yet\b/i,
+    /\bthere are no retries\b/i,
+    /\barrives with cancellation\b/i,
+    /\blater milestone\b/i,
+    /\bDay [1-7]\b/,
+  ];
+  const declarations = shipped.filter((p) => p.endsWith('.d.ts'));
+  if (declarations.length === 0) throw new Error('no declarations in the tarball');
+  for (const path of declarations) {
+    const text = readFileSync(join(root, path), 'utf8');
+    for (const claim of staleDocClaims) {
+      const found = claim.exec(text);
+      if (found) {
+        throw new Error(`${path} documents a shipped feature as missing: "${found[0]}"`);
+      }
+    }
+  }
+  // And the retry surface must actually be documented where a consumer looks.
+  const runDocs = readFileSync(join(root, 'dist/esm/types.d.ts'), 'utf8');
+  for (const feature of ['retry', 'attemptTimeoutMs', 'AbortSignal', 'onDecision']) {
+    if (!runDocs.includes(feature)) {
+      throw new Error(`dist/esm/types.d.ts does not mention ${feature}`);
+    }
+  }
+  log(`docs:      ${declarations.length} declaration files checked`);
+
   // --- ESM consumer -----------------------------------------------------
   const esmDir = join(workspace, 'consumer-esm');
   installFixture(esmDir, tarball, {type: 'module'});

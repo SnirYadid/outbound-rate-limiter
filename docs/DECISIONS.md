@@ -211,9 +211,11 @@ elapsed, so an injected wall clock stalls rather than inflating.
   `abort()`? Deferred until there is a concrete need.
 - **O3** What is the right default for `maxQueueDepth`? 1024 per key is a
   guess. Needs a real workload to calibrate.
-- **O4** Lint-enforced layering (`import/no-cycle`, per-layer
-  `no-restricted-imports`). The hygiene test covers the globals rule today;
-  the cycle rule is not yet enforced.
+- **O4** ~~Lint-enforced layering.~~ **Settled.** Per-layer
+  `no-restricted-imports` landed in `eslint.config.js`; cycle detection landed
+  as `test/architecture.spec.ts` instead of `import-x/no-cycle`, because that
+  rule was proven never to consult its resolver. See docs/ARCHITECTURE.md,
+  "Why cycle detection is a test and not a lint rule".
 
 ---
 

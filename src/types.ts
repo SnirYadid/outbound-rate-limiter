@@ -1,12 +1,17 @@
 /**
- * Public types that are settled.
+ * The public contract, in one file.
  *
- * Deliberately narrow: types describing behaviour that is not implemented yet
- * (the retry policy, the telemetry event union) are NOT exported, because a
- * published type is a promise. They land with the code that implements them,
- * and every one of them is an ADDITIVE change to the shapes below — a new
- * optional field on `RunOptions`, a new property on `AttemptContext` — so
- * nothing here has to move.
+ * Everything a consumer can name lives here: what you configure
+ * (`LimiterOptions`, `RateConstraint`, `RunOptions`, `RetryPolicy`), what you
+ * are handed back (`Limiter`, `AttemptContext`, `KeySnapshot`, `LimiterStats`)
+ * and what you observe (`Decision` and its vocabulary). Kept whole rather than
+ * split, so the entire surface can be read in one pass.
+ *
+ * A published type is a promise, so nothing is declared here that the code
+ * does not do. The doc comments are the tooltips a consumer reads in their
+ * editor — they ship in the generated `.d.ts`, and a test plus the packaging
+ * smoke check both refuse a release where they describe a shipped feature as
+ * missing.
  */
 
 import type {RandomFn} from './random.js';
@@ -203,10 +208,21 @@ export interface RunOptions {
   /**
    * Abandon one attempt after this many milliseconds.
    *
-   * The `AbortSignal` story arrives with cancellation; today the attempt's
-   * promise is simply abandoned, so make sure your work is safe to leave
-   * running. Whether it completed is unknown, which is why
-   * `retryOnAttemptTimeout` defaults to false.
+   * On expiry the `AbortSignal` on that attempt's `AttemptContext` is aborted
+   * and QuotaPilot stops waiting for the promise. Thread that signal into
+   * whatever you call — QuotaPilot asks your task to stop and cannot compel
+   * it, so a task that ignores the signal keeps running, and the concurrency
+   * cap is therefore a bound on OBSERVABLE work.
+   *
+   * The call rejects with `QuotaPilotTimeoutError`, which deliberately carries
+   * no `cause`: the attempt produced no error, it was abandoned, and whether
+   * the remote operation completed is unknown. That is why
+   * `retry.retryOnAttemptTimeout` defaults to false — repeating work that may
+   * have succeeded is only safe for an idempotent operation.
+   *
+   * A late result from an abandoned attempt is discarded: it cannot settle the
+   * caller, and its rejection is absorbed rather than left to become an
+   * unhandled rejection.
    */
   readonly attemptTimeoutMs?: number;
 
@@ -493,10 +509,26 @@ export interface Limiter {
   /**
    * Runs `fn` once capacity allows, and resolves with its result.
    *
-   * Waits by default: a call with no capacity is queued, not refused. It
-   * rejects with a `QuotaPilot*` error when the limiter itself refuses (a full
-   * queue, an untrackable key), and with whatever `fn` threw otherwise. There
-   * are no retries in this release — `fn` runs exactly once.
+   * Waits by default: a call with no capacity is queued, not refused. Pass
+   * `onSaturated: 'reject'` to fail immediately instead.
+   *
+   * `fn` runs once unless you supply a `retry` policy, in which case it runs
+   * up to `retry.maxAttempts` times and every attempt pays for its own
+   * capacity. Each attempt receives an `AttemptContext` carrying its attempt
+   * number and an `AbortSignal`.
+   *
+   * The rejection tells you who gave up. A `QuotaPilot*` error means the
+   * limiter refused — a full queue, an untrackable key, a saturated
+   * constraint under `'reject'`, an exhausted `totalBudgetMs`, an
+   * `attemptTimeoutMs` — so `catch (e) { if (e instanceof QuotaPilotError) }`
+   * reads as "the limiter stopped this", never "the request failed". Anything
+   * else is whatever `fn` threw, unchanged, including when the attempts you
+   * configured ran out or your classifier said stop.
+   *
+   * Throws synchronously, rather than rejecting, for a configuration mistake:
+   * a `cost` no constraint could ever admit, a malformed `retry` policy, a
+   * non-positive timeout. Those are programming errors and should fail where
+   * they were written.
    */
   run<T>(fn: (ctx: AttemptContext) => T | Promise<T>, options?: RunOptions): Promise<T>;
 

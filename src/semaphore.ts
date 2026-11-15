@@ -7,7 +7,8 @@
  * what lets admission check rate capacity and a concurrency slot in one
  * synchronous block: if either is unavailable, nothing has been taken. An
  * `acquire(): Promise<Release>` API would force an `await` into the middle of
- * admission, which is exactly the rework Day 3 must not need.
+ * admission, and that `await` is precisely the thing that makes two callers
+ * able to both observe capacity and both commit.
  *
  * Waiters are woken in FIFO order, which is what makes cross-key fairness a
  * statement rather than a hope. When slots are scarce, keys are served in the
