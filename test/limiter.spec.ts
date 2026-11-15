@@ -104,6 +104,267 @@ describe('createLimiter — configuration', () => {
   });
 });
 
+describe('run() — validation contract', () => {
+  /**
+   * Two properties, and both are observable so both are pinned.
+   *
+   * EVERY option is validated before the promise exists, so a configuration
+   * mistake throws at the call site rather than arriving as a rejection. A
+   * library that mixes the two for one class of mistake is one you cannot
+   * reason about — and `maxAttempts: 0` was briefly a rejection while
+   * `cost: 0` threw, which is exactly the inconsistency this guards.
+   *
+   * And when SEVERAL options are wrong at once, which error surfaces is
+   * determined by the order of the checks. That order is behaviour: callers
+   * read the first message they get and fix that field. It must survive any
+   * rearrangement of the validation code.
+   */
+
+  const validRetry = {maxAttempts: 2, classify: () => ({retry: false as const})};
+
+  it.each([
+    ['fn', [undefined, {}], /requires a function/],
+    ['key', [() => 'x', {key: 7}], /key must be a string/],
+    ['cost', [() => 'x', {cost: 0}], /cost/],
+    ['signal', [() => 'x', {signal: {} as AbortSignal}], /signal must be an AbortSignal/],
+    ['onSaturated', [() => 'x', {onSaturated: 'maybe'}], /onSaturated must be/],
+    ['retry.classify', [() => 'x', {retry: {maxAttempts: 2}}], /retry\.classify is required/],
+    ['retry.maxAttempts', [() => 'x', {retry: {...validRetry, maxAttempts: 0}}], /maxAttempts/],
+    ['attemptTimeoutMs', [() => 'x', {attemptTimeoutMs: 0}], /attemptTimeoutMs/],
+    ['totalBudgetMs', [() => 'x', {totalBudgetMs: -5}], /totalBudgetMs/],
+  ])('throws synchronously for a bad %s, never rejecting', (_label, args, message) => {
+    const {limiter} = build(perSecond10);
+    const [fn, options] = args as [() => unknown, Record<string, unknown>];
+
+    let thrown: unknown;
+    try {
+      // Deliberately not awaited: if this returned a promise instead of
+      // throwing, the assertion below would catch it as an unexpected pass.
+      void limiter.run(fn, options);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(QuotaPilotConfigError);
+    expect((thrown as Error).message).toMatch(message);
+  });
+
+  it('reports the first invalid option in a fixed order', () => {
+    // Every option below is invalid at once. The message identifies which
+    // check runs first, so this test is the specification of the precedence.
+    const {limiter} = build(perSecond10);
+    const everythingWrong = {
+      key: 7 as unknown as string,
+      cost: 0,
+      signal: {} as AbortSignal,
+      onSaturated: 'maybe' as unknown as 'wait',
+      retry: {maxAttempts: 0} as never,
+      attemptTimeoutMs: 0,
+      totalBudgetMs: -5,
+    };
+
+    const firstError = (options: Record<string, unknown>): string => {
+      try {
+        void limiter.run(() => 'x', options);
+      } catch (error) {
+        return (error as Error).message;
+      }
+      throw new Error('expected a synchronous throw');
+    };
+
+    // fn is checked before anything in the options bag.
+    expect(firstError({...everythingWrong})).toMatch(/key must be a string/);
+    expect(() => limiter.run(undefined as unknown as () => void, everythingWrong)).toThrow(
+      /requires a function/
+    );
+
+    // Then, peeling off one field at a time, the documented order:
+    // key → cost → signal → onSaturated → retry → attemptTimeoutMs → totalBudgetMs
+    const {key: _key, ...noKey} = everythingWrong;
+    expect(firstError(noKey)).toMatch(/cost/);
+
+    const {cost: _cost, ...noCost} = noKey;
+    expect(firstError(noCost)).toMatch(/signal must be an AbortSignal/);
+
+    const {signal: _signal, ...noSignal} = noCost;
+    expect(firstError(noSignal)).toMatch(/onSaturated must be/);
+
+    const {onSaturated: _onSaturated, ...noOnSaturated} = noSignal;
+    expect(firstError(noOnSaturated)).toMatch(/retry\.classify is required/);
+
+    const {retry: _retry, ...noRetry} = noOnSaturated;
+    expect(firstError(noRetry)).toMatch(/attemptTimeoutMs/);
+
+    const {attemptTimeoutMs: _attemptTimeoutMs, ...noAttemptTimeout} = noRetry;
+    expect(firstError(noAttemptTimeout)).toMatch(/totalBudgetMs/);
+  });
+
+  it('creates no partition and spends nothing when validation fails', () => {
+    // A rejected configuration must not leave a tracked key behind, which
+    // would otherwise count against maxKeys for a call that never ran.
+    const {limiter} = build(perSecond10);
+
+    expect(() => limiter.run(() => 'x', {key: 'never-tracked', cost: 0})).toThrow(
+      QuotaPilotConfigError
+    );
+
+    expect(limiter.stats()).toMatchObject({keys: 0, queued: 0, inflight: 0});
+    expect(limiter.inspect('never-tracked').tracked).toBe(false);
+  });
+});
+
+describe('concurrency accounting — one owner for inflight', () => {
+  /**
+   * `stats().inflight` is the public face of a counter that admission
+   * increments and attempt settlement decrements. Every path that starts an
+   * attempt must account for it identically, and there are two such paths —
+   * the pump, and `onSaturated: 'reject'`, which bypasses the queue entirely.
+   *
+   * These tests exercise both, including the awkward cases: a task that throws
+   * in the same synchronous turn it was started, and a completion that
+   * re-enters the pump from inside its own stack frame.
+   */
+
+  it('returns to zero after a task that throws synchronously, on the queued path', async () => {
+    const {clock, limiter} = build(perSecond10);
+    const calls = Array.from({length: 5}, () =>
+      ignore(
+        limiter.run(() => {
+          throw new Error('sync');
+        })
+      )
+    );
+    await settleAll(clock, calls);
+
+    expect(limiter.stats()).toMatchObject({queued: 0, inflight: 0, backingOff: 0});
+  });
+
+  it('returns to zero after a task that throws synchronously, on the reject path', async () => {
+    const {clock, limiter} = build(perSecond10);
+    const calls = Array.from({length: 5}, () =>
+      ignore(
+        limiter.run(
+          () => {
+            throw new Error('sync');
+          },
+          {onSaturated: 'reject'}
+        )
+      )
+    );
+    await settleAll(clock, calls);
+
+    expect(limiter.stats()).toMatchObject({queued: 0, inflight: 0, backingOff: 0});
+  });
+
+  it('counts a reject-path call as inflight while it runs', async () => {
+    const {clock, limiter} = build(perSecond10);
+    const gate = deferred<string>();
+
+    const call = limiter.run(() => gate.promise, {key: 'k', onSaturated: 'reject'});
+    // Started synchronously, so the count is already visible.
+    expect(limiter.stats().inflight).toBe(1);
+    expect(limiter.inspect('k').inflight).toBe(1);
+
+    gate.resolve('done');
+    await settleAll(clock, [call]);
+    expect(limiter.stats().inflight).toBe(0);
+  });
+
+  it('enforces maxConcurrentPerKey across both admission paths', async () => {
+    // The per-key cap is read from the same counter both paths write, so a
+    // mismatch between them would show up as a cap that can be exceeded by
+    // mixing the two.
+    const {clock, limiter} = build(perSecond10, {maxConcurrentPerKey: 2});
+    const gates = [deferred<string>(), deferred<string>()];
+
+    const held = [
+      limiter.run(() => gates[0]!.promise, {key: 'k'}),
+      limiter.run(() => gates[1]!.promise, {key: 'k', onSaturated: 'reject'}),
+    ];
+    await clock.flush();
+    expect(limiter.stats().inflight).toBe(2);
+
+    // The cap is full, so a third refuses rather than starting.
+    let refused: unknown;
+    await limiter.run(() => 'third', {key: 'k', onSaturated: 'reject'}).catch((error: unknown) => {
+      refused = error;
+    });
+    expect((refused as {kind?: string}).kind).toBe('key-concurrency');
+    expect(limiter.stats().inflight).toBe(2);
+
+    gates.forEach((gate) => {
+      gate.resolve('done');
+    });
+    await settleAll(clock, held);
+    expect(limiter.stats().inflight).toBe(0);
+  });
+
+  it('never exceeds either cap while a completion re-enters the pump', async () => {
+    // Completion re-pumps from inside its own stack frame, so the counter is
+    // read and written re-entrantly. Sampling it on every admission is how a
+    // transient overshoot would be caught.
+    const {clock, limiter} = build(perSecond10, {maxConcurrent: 3, maxConcurrentPerKey: 2});
+    const samples: number[] = [];
+
+    const calls = Array.from({length: 24}, (_, index) =>
+      ignore(
+        limiter.run(
+          () => {
+            samples.push(limiter.stats().inflight);
+            if (index % 3 === 0) throw new Error('sync');
+            return index;
+          },
+          {key: `k${index % 4}`}
+        )
+      )
+    );
+    await settleAll(clock, calls);
+
+    expect(samples).toHaveLength(24);
+    expect(Math.max(...samples)).toBeLessThanOrEqual(3);
+    expect(limiter.stats()).toMatchObject({queued: 0, inflight: 0, backingOff: 0});
+  });
+});
+
+describe('ordering — admission, settlement and observation', () => {
+  it('commits capacity before the task runs, in the same turn', () => {
+    // The atomicity contract, observed from inside the task: by the time it is
+    // invoked, its own cost has already been debited.
+    const {limiter} = build([{name: 'c', limit: 10, interval: 'minute', burst: 10}]);
+    let availableInside = -1;
+
+    void ignore(
+      limiter.run(
+        () => {
+          availableInside = limiter.inspect('k').constraints[0]?.available ?? -1;
+        },
+        {key: 'k', cost: 4}
+      )
+    );
+
+    expect(availableInside).toBe(6);
+  });
+
+  it('settles the caller before the drain barrier sees the call as finished', async () => {
+    // `settle` answers the caller and only then resolves the internal `done`
+    // promise, so a `drain()` waiter can never observe a call as complete
+    // before its result has been delivered.
+    const {clock, limiter} = build(perSecond10);
+    const order: string[] = [];
+
+    const call = limiter.run(() => 'value').then((value) => {
+      order.push(`caller:${value}`);
+    });
+    const drained = limiter.drain().then(() => {
+      order.push('drain');
+    });
+
+    await settleAll(clock, [call, drained]);
+
+    expect(order).toEqual(['caller:value', 'drain']);
+  });
+});
+
 describe('createLimiter — basic execution', () => {
   it('runs immediately when capacity is free and resolves with the result', async () => {
     const {limiter} = build(perSecond10);

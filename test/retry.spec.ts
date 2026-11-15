@@ -1220,3 +1220,142 @@ describe('cancelWake — unit', () => {
     expect(clock.pendingTimers()).toBe(0);
   });
 });
+
+describe('retry — observable ordering across attempts', () => {
+  /**
+   * The sequence of scheduler decisions, and the side effects attached to
+   * each, in the exact order a caller and an observer see them.
+   *
+   * This exists to protect a refactor. Retry mechanics are spread across
+   * `call.ts` (attempt lifecycle, backoff), `scheduler.ts` (admission) and
+   * `limiter.ts` (intake, telemetry), and the ORDER in which those three
+   * cooperate is behaviour that no single unit test pins.
+   */
+
+  it('emits one admitted per attempt, one retrying per backoff, and completes last', async () => {
+    const clock = createVirtualClock(0);
+    const kinds: string[] = [];
+    const limiter = createLimiter({
+      constraints: plenty,
+      clock,
+      onDecision: (event) => void kinds.push(event.kind),
+    });
+
+    let attempts = 0;
+    const call = limiter.run(
+      () => {
+        attempts++;
+        if (attempts < 3) throw new Error('transient');
+        return 'third time';
+      },
+      {key: 'k', retry: fixed(5, 100)}
+    );
+    await settleAll(clock, [call]);
+
+    await expect(call).resolves.toBe('third time');
+    // A retry re-enters the queue tail, and `requeue` does not re-announce a
+    // `queued` event: the call was announced once, when it arrived.
+    expect(kinds).toEqual([
+      'queued',
+      'admitted',
+      'retrying',
+      'admitted',
+      'retrying',
+      'admitted',
+      'completed',
+    ]);
+  });
+
+  it('charges capacity per attempt, at the moment each attempt starts', async () => {
+    const clock = createVirtualClock(0);
+    const availableAtEachAttempt: number[] = [];
+    const limiter: ReturnType<typeof createLimiter> = createLimiter({
+      constraints: [{name: 'c', limit: 100, interval: 'minute', burst: 100}],
+      clock,
+      onDecision: (event) => {
+        if (event.kind === 'admitted') {
+          availableAtEachAttempt.push(limiter.inspect('k').constraints[0]!.available);
+        }
+      },
+    });
+
+    let attempts = 0;
+    const call = ignore(
+      limiter.run(
+        () => {
+          attempts++;
+          throw new Error('always');
+        },
+        {key: 'k', cost: 10, retry: fixed(3, 100)}
+      )
+    );
+    await settleAll(clock, [call]);
+
+    expect(attempts).toBe(3);
+    // 10 debited per attempt, and the bucket's refill over the two 100ms
+    // backoffs is small enough that the steps stay distinct.
+    expect(availableAtEachAttempt.map(Math.floor)).toEqual([90, 80, 70]);
+  });
+
+  it('holds neither a slot nor a queue entry while backing off', async () => {
+    // The three states are mutually exclusive, and `stats()` is where that is
+    // visible. A backing-off call counted as queued or inflight would make
+    // both the eviction predicate and the concurrency caps wrong.
+    const clock = createVirtualClock(0);
+    const limiter = createLimiter({constraints: plenty, clock});
+    const observed: {queued: number; inflight: number; backingOff: number}[] = [];
+
+    const call = ignore(
+      limiter.run(
+        () => {
+          throw new Error('always');
+        },
+        {key: 'k', retry: fixed(2, 500)}
+      )
+    );
+
+    await clock.advance(100);
+    const {keys: _keys, decisionHookErrors: _errors, ...midBackoff} = limiter.stats();
+    observed.push(midBackoff);
+
+    await settleAll(clock, [call]);
+    const {keys: _k2, decisionHookErrors: _e2, ...afterwards} = limiter.stats();
+    observed.push(afterwards);
+
+    expect(observed).toEqual([
+      {queued: 0, inflight: 0, backingOff: 1},
+      {queued: 0, inflight: 0, backingOff: 0},
+    ]);
+  });
+
+  it('settles the caller exactly once when a late attempt resolves after a timeout', async () => {
+    // The two-level settlement rule: the attempt's own claim decides who
+    // releases the slot, and the call's `settled` decides who answers the
+    // caller. A straggler must do neither.
+    const clock = createVirtualClock(0);
+    const limiter = createLimiter({constraints: plenty, clock});
+    const late = deferred<string>();
+    let settlements = 0;
+
+    const call = limiter
+      .run(() => late.promise, {key: 'k', attemptTimeoutMs: 50})
+      .then(
+        () => {
+          settlements++;
+        },
+        () => {
+          settlements++;
+        }
+      );
+
+    await clock.advance(50);
+    // The timeout has answered the caller. Now the abandoned task finishes.
+    late.resolve('too late');
+    await settleAll(clock, [call]);
+    await clock.flush();
+
+    expect(settlements).toBe(1);
+    expect(limiter.stats()).toMatchObject({queued: 0, inflight: 0, backingOff: 0});
+    expect(clock.pendingTimers()).toBe(0);
+  });
+});

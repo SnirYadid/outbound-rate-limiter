@@ -12,6 +12,7 @@ import {describe, expect, it} from 'vitest';
 import {createEmitter, sealEvent} from '../src/telemetry.js';
 import {createLimiter} from '../src/limiter.js';
 import type {Decision, RateConstraint, RetryPolicy} from '../src/types.js';
+import {createCountingClock} from './harness/counting-clock.js';
 import {deferred, ignore} from './harness/deferred.js';
 import {settleAll} from './harness/settle.js';
 import {createVirtualClock} from './harness/virtual-clock.js';
@@ -370,6 +371,56 @@ describe('telemetry — immutability', () => {
     }
   });
 
+  it('hands out frozen events for every one of the six kinds', async () => {
+    // The test above covers one happy path, which produces three kinds. The
+    // other three are emitted from different call sites, and each site seals
+    // its own event — so a site that forgot would weaken T2 for that kind
+    // alone. This drives all six and checks the lot.
+    const collected: Decision[] = [];
+    const tight: RateConstraint[] = [{name: 'tight', limit: 1, interval: 'minute', burst: 1}];
+
+    // queued, admitted, completed, delayed, retrying.
+    const first = watched(tight, {maxQueueDepth: 1});
+    const failing = ignore(
+      first.limiter.run(
+        () => {
+          throw new Error('transient');
+        },
+        {key: 'k', retry: fixed(2, 10)}
+      )
+    );
+    const behind = ignore(first.limiter.run(() => 'behind', {key: 'k'}));
+    await settleAll(first.clock, [failing, behind]);
+    collected.push(...first.events);
+
+    // refused.
+    const second = watched(tight);
+    const taken = second.limiter.run(() => 'got-it', {key: 'k'});
+    await settleAll(second.clock, [taken]);
+    const rejected = ignore(
+      second.limiter.run(() => 'no', {key: 'k', onSaturated: 'reject'})
+    );
+    await settleAll(second.clock, [rejected]);
+    collected.push(...second.events);
+
+    const kinds = new Set(collected.map((event) => event.kind));
+    expect([...kinds].sort()).toEqual([
+      'admitted',
+      'completed',
+      'delayed',
+      'queued',
+      'refused',
+      'retrying',
+    ]);
+
+    for (const event of collected) {
+      expect(Object.isFrozen(event), `${event.kind} must be frozen`).toBe(true);
+      expect(() => {
+        (event as {key: string}).key = 'tampered';
+      }, `${event.kind} must reject mutation`).toThrow();
+    }
+  });
+
   it('carries only primitives, which is what makes a shallow freeze complete', async () => {
     // The structural reason `Object.freeze` is sufficient: there is no nested
     // object for a listener to reach through and mutate.
@@ -590,6 +641,109 @@ describe('telemetry — reentrancy', () => {
   });
 });
 
+describe('telemetry — costs nothing when nobody is watching', () => {
+  /**
+   * `LimiterOptions.onDecision` is documented as being on the hot path, and the
+   * emitter exposes `active` so callers can skip building an event nobody will
+   * read. These tests hold the library to that, differentially: the same
+   * schedule is run with and without a listener, and the clock counts how often
+   * it was read. Building an event stamps `at` from the clock, so a discarded
+   * event is a measurable extra read.
+   */
+
+  /**
+   * `onSaturated: 'reject'` on an idle key is the one path where every event
+   * comes from `call.ts`: admission succeeds without the queue, so there is no
+   * `queued` event from the limiter and the pump never runs. Comparing clock
+   * reads across that path therefore isolates `call.ts`'s own gating instead of
+   * measuring the limiter's and the scheduler's, which are already lazy.
+   */
+  const readsForRejectPath = async (
+    listener: ((event: Decision) => void) | undefined
+  ): Promise<number> => {
+    const clock = createCountingClock(0);
+    const limiter = createLimiter({
+      constraints: plenty,
+      clock,
+      ...(listener === undefined ? {} : {onDecision: listener}),
+    });
+    clock.resetReads();
+    const call = limiter.run(() => 'ok', {key: 'k', onSaturated: 'reject'});
+    await settleAll(clock, [call]);
+    return clock.reads();
+  };
+
+  // KNOWN FAILURE, deliberately recorded rather than hidden. `call.ts`'s
+  // `publish` takes an already-constructed event and only then checks
+  // `env.telemetry`, so the `admitted` and `completed` events are built and
+  // thrown away — the reads come out equal. `it.fails` asserts that it still
+  // fails, so this flips to a plain `it` as part of fixing it, and cannot be
+  // forgotten.
+  it.fails('reads the clock less when no listener is attached', async () => {
+    const withListener = await readsForRejectPath(() => undefined);
+    const without = await readsForRejectPath(undefined);
+
+    // Equal counts mean the `admitted` and `completed` events are being built
+    // and then thrown away, which is what `Emitter.active` exists to prevent.
+    expect(without).toBeLessThan(withListener);
+  });
+
+  it('stays lazy on the queued path too', async () => {
+    const readsForQueue = async (
+      listener: ((event: Decision) => void) | undefined
+    ): Promise<number> => {
+      const clock = createCountingClock(0);
+      const limiter = createLimiter({
+        constraints: paced,
+        clock,
+        ...(listener === undefined ? {} : {onDecision: listener}),
+      });
+      clock.resetReads();
+      const calls = [
+        ignore(limiter.run(() => 'a', {key: 'k'})),
+        ignore(limiter.run(() => 'b', {key: 'k'})),
+        ignore(
+          limiter.run(
+            () => {
+              throw new Error('transient');
+            },
+            {key: 'k', retry: fixed(2, 50)}
+          )
+        ),
+      ];
+      await settleAll(clock, calls);
+      return clock.reads();
+    };
+
+    expect(await readsForQueue(undefined)).toBeLessThan(await readsForQueue(() => undefined));
+  });
+
+  it('produces identical results with and without a listener', async () => {
+    // The laziness above must be invisible in behaviour: same admissions, same
+    // pacing, same outcomes.
+    const run = async (listener: ((event: Decision) => void) | undefined) => {
+      const clock = createVirtualClock(0);
+      const admittedAt: number[] = [];
+      const limiter = createLimiter({
+        constraints: paced,
+        clock,
+        ...(listener === undefined ? {} : {onDecision: listener}),
+      });
+      const calls = Array.from({length: 4}, (_, index) =>
+        limiter.run(() => void admittedAt.push(clock.now()), {key: 'k', cost: index === 3 ? 1 : 1})
+      );
+      await settleAll(clock, calls);
+      return {admittedAt, stats: limiter.stats()};
+    };
+
+    const watchedRun = await run(() => undefined);
+    const quietRun = await run(undefined);
+
+    expect(quietRun.admittedAt).toEqual(watchedRun.admittedAt);
+    expect(quietRun.stats).toEqual({...watchedRun.stats, decisionHookErrors: 0});
+  });
+});
+
 describe('emitter — unit', () => {
   it('is inert and reports no failures without a listener', () => {
     const emitter = createEmitter(undefined);
@@ -613,6 +767,27 @@ describe('emitter — unit', () => {
     emitter.emit(sealEvent({at: 0, key: 'k', scope: 'process', kind: 'queued', depth: 1}));
 
     expect(order).toEqual(['enter:queued', 'exit:queued', 'enter:completed', 'exit:completed']);
+  });
+
+  it('delivers buffered nested events frozen, exactly as it delivers direct ones', () => {
+    // Sealing and buffering are independent today — the caller seals, the
+    // emitter buffers — so nothing stops a future emitter from flushing its
+    // buffer by a route that skips the seal. This pins the property at the
+    // boundary a listener actually observes.
+    const frozen: boolean[] = [];
+    const emitter: ReturnType<typeof createEmitter> = createEmitter((event) => {
+      frozen.push(Object.isFrozen(event));
+      if (event.kind === 'queued') {
+        emitter.emit(
+          sealEvent({at: 0, key: 'k', scope: 'process', kind: 'completed', attempts: 1, elapsedMs: 0})
+        );
+      }
+    });
+
+    emitter.emit(sealEvent({at: 0, key: 'k', scope: 'process', kind: 'queued', depth: 1}));
+
+    // The direct delivery and the flushed nested one.
+    expect(frozen).toEqual([true, true]);
   });
 
   it('keeps delivering after a listener throws', () => {
