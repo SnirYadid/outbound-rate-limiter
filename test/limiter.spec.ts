@@ -6,7 +6,7 @@ import {
   QuotaPilotKeyLimitError,
   QuotaPilotQueueFullError,
 } from '../src/errors.js';
-import type {RateConstraint} from '../src/types.js';
+import type {AttemptContext, RateConstraint} from '../src/types.js';
 import {deferred, ignore, type Deferred} from './harness/deferred.js';
 import {settleAll} from './harness/settle.js';
 import {createVirtualClock, type VirtualClock} from './harness/virtual-clock.js';
@@ -130,16 +130,19 @@ describe('createLimiter — basic execution', () => {
 
   it('tells the task which key it ran under and how long it waited', async () => {
     const {clock, limiter} = build(paced);
-    const seen: {key: string; attempt: number; elapsedMs: number}[] = [];
+    const seen: AttemptContext[] = [];
     const calls = [
-      limiter.run((ctx) => void seen.push({...ctx}), {key: 'acct'}),
-      limiter.run((ctx) => void seen.push({...ctx}), {key: 'acct'}),
+      limiter.run((ctx) => void seen.push(ctx), {key: 'acct'}),
+      limiter.run((ctx) => void seen.push(ctx), {key: 'acct'}),
     ];
 
     await settleAll(clock, calls);
 
     // `attempt` is 1-based and present from the first try.
-    expect(seen[0]).toEqual({key: 'acct', attempt: 1, elapsedMs: 0});
+    expect(seen[0]).toMatchObject({key: 'acct', attempt: 1, elapsedMs: 0});
+    // And every attempt gets a signal, whether or not the caller passed one.
+    expect(seen[0]?.signal).toBeInstanceOf(AbortSignal);
+    expect(seen[0]?.signal.aborted).toBe(false);
     // The second waited out the pacing interval.
     expect(seen[1]?.key).toBe('acct');
     expect(seen[1]?.elapsedMs).toBe(100);
@@ -417,7 +420,7 @@ describe('MANDATORY 5 — synchronous task failures', () => {
     await settleAll(clock, calls);
 
     expect(attempts).toBe(25);
-    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0, backingOff: 0});
+    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0, backingOff: 0, decisionHookErrors: 0});
   });
 
   it('does not overflow the stack when many keys all throw synchronously', async () => {
@@ -497,7 +500,7 @@ describe('MANDATORY 6 — rejected asynchronous tasks', () => {
 
     expect(outcomes).toHaveLength(20);
     expect(outcomes.filter((o) => o === 'err')).toHaveLength(7);
-    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0, backingOff: 0});
+    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0, backingOff: 0, decisionHookErrors: 0});
   });
 });
 
@@ -622,7 +625,7 @@ describe('MANDATORY 10 — scheduler wake-up behaviour', () => {
     await settleAll(clock, calls);
 
     expect(clock.pendingTimers()).toBe(0);
-    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0, backingOff: 0});
+    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0, backingOff: 0, decisionHookErrors: 0});
   });
 
   it('wakes a rate-blocked key and a slot-blocked key by their own signals', async () => {
@@ -700,7 +703,7 @@ describe('stats', () => {
     const queuedSameKey = limiter.run(() => 'x', {key: 'a'});
     const queuedOtherKey = limiter.run(() => 'y', {key: 'b'});
 
-    expect(limiter.stats()).toEqual({keys: 2, queued: 2, inflight: 1, backingOff: 0});
+    expect(limiter.stats()).toEqual({keys: 2, queued: 2, inflight: 1, backingOff: 0, decisionHookErrors: 0});
 
     gate.resolve();
     await settleAll(clock, [running, queuedSameKey, queuedOtherKey]);

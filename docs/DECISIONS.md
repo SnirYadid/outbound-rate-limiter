@@ -536,3 +536,129 @@ The determinism scanners now strip comments before matching, as the atomicity
 scanner always has. A doc comment naming `Math.random` to say what an option
 defaults to is documentation; a call to it is a violation. Flagging the former
 was a false positive that would have pushed the docs toward being less clear.
+
+---
+
+# Day 5 decisions
+
+## D44 — `state` is the single source of truth for what an abort must release
+
+Cancellation has to release exactly what a call currently holds, and that
+differs in each of five states. Inferring it from the resources themselves
+means five independent checks that must all stay in step; a named `state`
+updated at every transition means one.
+
+The ownership table at the top of `call.ts` is the contract: every resource has
+one owner and one release path. The row most easily missed is the **abort
+listener**, owned by the call for its whole life and removed on settle — a
+caller reusing one `AbortController` across many calls would otherwise
+accumulate a listener, and each listener retains the whole call closure.
+
+## D45 — Cancelling before an attempt starts spends nothing; after, refunds nothing
+
+Both halves matter. A pre-aborted signal is answered **before**
+`registry.acquire`, so no partition is created and no capacity is reserved.
+Queued and backing-off cancellations release their own resources and leave
+every bucket untouched.
+
+Once an attempt has started, the request was sent, so nothing is returned (G7).
+A test replays ten cancel-immediately cycles and asserts the conservation bound
+still holds — cancellation must not become a capacity generator.
+
+## D46 — A same-turn abort beats a resolution the call has not observed
+
+Worth stating because it reads like a coin toss and is not. Resolving a promise
+schedules its `.then` as a **microtask**; `abort()` dispatches its listener
+**synchronously**. So an abort issued in the same turn as the resolution wins,
+and an abort issued after the microtask has run is inert.
+
+Neither is arbitrary: the call genuinely had not observed the result when the
+caller changed its mind. Both directions are pinned by tests.
+
+## D47 — Telemetry is six flat event kinds, with no error payloads
+
+`queued`, `delayed`, `admitted`, `retrying`, `completed`, `refused`. No
+`attempt-finished`: a successful attempt is implied by `completed`, and a
+failed one by `retrying` or `refused`, so an extra kind would double-report.
+
+Every field is a **primitive**, which is what makes `Object.freeze` a complete
+guarantee rather than a shallow one — there is no nested object a listener
+could reach through. A test asserts that property, because it is the reason the
+shallow freeze is sufficient.
+
+Errors are deliberately absent. The classifier already saw the error; putting
+it on an event would route request payloads into whatever consumes telemetry. A
+test asserts a secret in an error message never appears in the event stream.
+
+## D48 — Listener isolation: four failure modes, four closures
+
+1. **Throws** — caught and counted. Propagating it would abandon a pump loop
+   mid-queue, which is how one bad log line stops a whole key.
+2. **Returns a rejected promise** (an `async` listener) — absorbed and counted.
+   Left alone it becomes an unhandled rejection and can kill the process under
+   `--unhandled-rejections=strict`.
+3. **Re-enters the limiter** — nested emissions are buffered and flushed by the
+   outer call, so depth stays at one however deeply a listener recurses.
+4. **Mutates an event** — events are frozen, and see D47 for why shallow is
+   enough.
+
+Failures are reported as `stats().decisionHookErrors`, not logged. A library
+that writes to the console is one you cannot silence.
+
+## D49 — Events are emitted after the transition commits
+
+A listener observing an `admitted` event sees the capacity already debited;
+there is a test that reads `inspect()` from inside the listener to prove it. The
+emit sites sit immediately after the state change and before anything else,
+which is what makes "a listener never catches a half-made decision" true rather
+than hoped for.
+
+## D50 — `drain()` is a barrier, not a shutdown
+
+It resolves when every call accepted **before** the invocation has settled,
+including queued attempts and retry backoffs. It does not close the limiter,
+does not reject new work, and never rejects.
+
+Implemented as a snapshot of a live-call set, which makes "calls accepted
+before the drain" an exact set rather than a heuristic, and makes repeated and
+overlapping drains independent for free.
+
+**It inherits the liveness of your tasks.** A task that never settles, with no
+`attemptTimeoutMs` and no signal, holds a drain open forever. That is correct —
+the work genuinely has not finished — and the integration test found it by
+hanging, which is the right way to learn it.
+
+Deliberately not built: `close()`. A caller who wants to stop accepting work
+stops calling `run()`; inventing a closed state would add a refusal reason, a
+new error path and a question about in-flight retries, for no capability the
+caller cannot already express.
+
+## D51 — Every refusal settles through the call, not around it
+
+The first draft of Day 5 added each call to the live set as soon as it was
+built, but the queue-full and saturated refusal paths rejected the caller's
+promise **directly** instead of going through the call's `settle`. So the
+internal `done` promise never resolved: `drain()` hung on a call that had
+already been answered, and the live set grew by one entry per refusal — a
+genuine memory leak.
+
+The fix routes those through `refuse(error, reason)`, so there is exactly one
+settle path. Found by the drain test, which hangs rather than fails if it
+regresses; the virtual-clock harness reports a stall with a count, which is why
+it was diagnosable in minutes rather than hours.
+
+## D52 — Unreachable branches: eliminate where possible, annotate where not
+
+Day 5 added four defensive guards. Coverage forced a decision on each:
+
+- The `else` of "remove the call from its queue" was removed entirely. It was
+  unreachable AND the handling was identical either way (`cancelWake` and
+  `repump` are safe no-ops), so the branch should not have existed.
+- `decide`'s `timedOut ? 'timeout' : 'error'` was **dead code**: a timeout only
+  reaches `decide` when `retryOnAttemptTimeout` is set, which requires a
+  policy. Simplified to `'error'`.
+- `onAbort`'s already-settled guard was made genuinely reachable by a test: a
+  shim whose `removeEventListener` is a no-op can dispatch twice.
+- `settle`'s own guard, the `'idle'` case and `decide`'s settled check remain
+  annotated. Each is the line that makes a stated guarantee structural rather
+  than a property of several call sites all staying correct.

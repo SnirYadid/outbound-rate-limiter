@@ -21,10 +21,16 @@
 
 import {tryAdmit, type AdmitContext} from './admit.js';
 import type {Partition} from './partition.js';
+import {sealEvent} from './telemetry.js';
 import type {Clock} from './time.js';
+import type {Decision, SaturationKind} from './types.js';
 
 export interface SchedulerContext extends AdmitContext {
   readonly clock: Clock;
+  /** Publishes a decision event. Never throws. */
+  readonly emit: (event: Decision) => void;
+  /** True when a listener is attached, so events are built only if watched. */
+  readonly telemetry: boolean;
 }
 
 /**
@@ -70,15 +76,30 @@ export function pump(partition: Partition, context: SchedulerContext): void {
 
       switch (outcome.blockedBy) {
         case 'rate':
+          publishDelay(partition, context, head.attemptsMade(), {
+            cause: 'rate',
+            binding: outcome.binding,
+            waitMs: outcome.waitMs,
+          });
           scheduleWake(partition, context, outcome.waitMs);
           return;
         case 'slot':
+          publishDelay(partition, context, head.attemptsMade(), {
+            cause: 'concurrency',
+            binding: 'maxConcurrent',
+            waitMs: 0,
+          });
           // Registered synchronously after the failed tryAcquire: see above.
           context.semaphore.waitForRelease(() => {
             pump(partition, context);
           });
           return;
         case 'key-concurrency':
+          publishDelay(partition, context, head.attemptsMade(), {
+            cause: 'key-concurrency',
+            binding: 'maxConcurrentPerKey',
+            waitMs: 0,
+          });
           // Nothing to register. This key has calls in flight, and each one
           // re-pumps when it settles.
           return;
@@ -87,6 +108,32 @@ export function pump(partition: Partition, context: SchedulerContext): void {
   } finally {
     partition.pumping = false;
   }
+}
+
+/**
+ * Reports that the scheduler has stopped to wait, and on what.
+ *
+ * Emitted after the decision not to admit is final — the pump is about to
+ * return — so a listener never observes a half-made decision.
+ */
+function publishDelay(
+  partition: Partition,
+  context: SchedulerContext,
+  attempt: number,
+  detail: {cause: SaturationKind; binding: string; waitMs: number}
+): void {
+  if (!context.telemetry) return;
+  const event: Decision = {
+    at: context.clock.now(),
+    key: partition.key,
+    scope: 'process',
+    kind: 'delayed',
+    cause: detail.cause,
+    binding: detail.binding,
+    waitMs: detail.waitMs,
+    attempt,
+  };
+  context.emit(sealEvent(event));
 }
 
 /**

@@ -72,6 +72,15 @@ export interface AttemptContext {
    * all included. The same clock the total budget is measured against.
    */
   readonly elapsedMs: number;
+  /**
+   * Aborted when the caller's own signal fires, or when this attempt exceeds
+   * `attemptTimeoutMs`. **Thread it into whatever you call.**
+   *
+   * QuotaPilot cannot stop your code; it can only ask. A task that ignores
+   * this keeps running after the limiter has moved on — see
+   * docs/GUARANTEES.md, "Guarantees conditional on cooperative cancellation".
+   */
+  readonly signal: AbortSignal;
 }
 
 /** What the retry classifier is told about the failure it is judging. */
@@ -202,6 +211,20 @@ export interface RunOptions {
   readonly attemptTimeoutMs?: number;
 
   /**
+   * Cancels the call.
+   *
+   * Honoured in every state: before admission, while queued, while blocked on
+   * concurrency, while sleeping between attempts, and while an attempt runs.
+   *
+   * Aborting BEFORE an attempt starts consumes no rate capacity. Aborting
+   * after one has started does not refund what it spent — the request was
+   * sent. The rejection is the signal's own `reason` when it has one, so it
+   * interoperates with `fetch`; otherwise a `QuotaPilotAbortError`. Either way
+   * `error.name === 'AbortError'`.
+   */
+  readonly signal?: AbortSignal;
+
+  /**
    * Ceiling on the whole call: queue waits, every attempt and every backoff.
    * Measured from `run()`.
    *
@@ -270,6 +293,100 @@ export interface KeySnapshot {
   readonly constraints: readonly ConstraintSnapshot[];
 }
 
+/** Why a logical call ended without a result. */
+export type RefusalReason =
+  /** `onSaturated: 'reject'` and the call could not start immediately. */
+  | 'saturated'
+  /** The key's queue was at `maxQueueDepth`. */
+  | 'queue-full'
+  /** `maxKeys` was reached and no partition could be evicted safely. */
+  | 'key-limit'
+  /** `totalBudgetMs` ran out. */
+  | 'budget'
+  /** `maxAttempts` was reached and the last attempt still failed. */
+  | 'attempts'
+  /** The classifier declined to retry, or itself threw. */
+  | 'not-retryable'
+  /** An attempt exceeded `attemptTimeoutMs` and was not retried. */
+  | 'timeout'
+  /** The task failed and no retry policy was configured. */
+  | 'error'
+  /** The caller's `AbortSignal` fired. */
+  | 'aborted';
+
+/** Fields every telemetry event carries. */
+export interface DecisionBase {
+  /** Clock reading when the event was emitted. */
+  readonly at: number;
+  /** The partition key the call is running under. */
+  readonly key: string;
+  /**
+   * Always `'process'` in this release.
+   *
+   * On every event rather than in the documentation alone, because the fact
+   * that these numbers describe ONE process is the thing most likely to be
+   * forgotten when reading them back.
+   */
+  readonly scope: 'process';
+}
+
+/**
+ * One scheduler decision, explained.
+ *
+ * Deliberately flat: every field is a primitive, so freezing an event is a
+ * complete guarantee rather than a shallow one. Errors are NOT included —
+ * your classifier already saw the error, and putting it here would route
+ * request payloads into whatever consumes telemetry.
+ */
+export type Decision =
+  /** The call entered its key's queue. Emitted once, on first arrival. */
+  | (DecisionBase & {readonly kind: 'queued'; readonly depth: number})
+  /**
+   * The call cannot start yet and the scheduler is now waiting.
+   *
+   * `cause` is never `'queued-ahead'`: that is a refusal, not a delay.
+   * `waitMs` is meaningful for `'rate'`, where the wait is known, and `0` for
+   * the concurrency causes, where it depends on other calls finishing.
+   */
+  | (DecisionBase & {
+      readonly kind: 'delayed';
+      readonly cause: SaturationKind;
+      /** The rate constraint's name, or the option name for concurrency. */
+      readonly binding: string;
+      readonly waitMs: number;
+      readonly attempt: number;
+    })
+  /** An attempt started. Capacity and a concurrency slot are now spent. */
+  | (DecisionBase & {
+      readonly kind: 'admitted';
+      readonly attempt: number;
+      readonly cost: number;
+      /** Milliseconds from `run()` to this attempt starting. */
+      readonly waitedMs: number;
+    })
+  /** An attempt failed and another has been scheduled. */
+  | (DecisionBase & {
+      readonly kind: 'retrying';
+      /** The attempt that just failed. */
+      readonly attempt: number;
+      readonly delayMs: number;
+      /** `'provider-hint'` means the delay came from the classifier's `afterMs`. */
+      readonly source: 'backoff' | 'provider-hint';
+    })
+  /** The call resolved. Implies the last attempt succeeded. */
+  | (DecisionBase & {
+      readonly kind: 'completed';
+      readonly attempts: number;
+      readonly elapsedMs: number;
+    })
+  /** The call rejected. `attempts` is `0` when it never started. */
+  | (DecisionBase & {
+      readonly kind: 'refused';
+      readonly reason: RefusalReason;
+      readonly attempts: number;
+      readonly elapsedMs: number;
+    });
+
 export interface LimiterStats {
   /** Partitions currently tracked. */
   readonly keys: number;
@@ -284,6 +401,15 @@ export interface LimiterStats {
    * the counters would not add up to the work actually outstanding.
    */
   readonly backingOff: number;
+  /**
+   * How many `onDecision` invocations have failed — thrown, or returned a
+   * rejected promise.
+   *
+   * Reported rather than logged, because a library that writes to the console
+   * is one you cannot silence. A non-zero value here means your telemetry is
+   * losing events.
+   */
+  readonly decisionHookErrors: number;
 }
 
 export interface LimiterOptions {
@@ -340,6 +466,21 @@ export interface LimiterOptions {
   readonly clock?: Clock;
 
   /**
+   * Called once per scheduler decision, explaining what happened and why.
+   *
+   * Synchronous and never awaited. It runs after the state transition it
+   * describes has committed, so it always observes consistent state, and it
+   * cannot corrupt the scheduler: a throw is counted, an `async` listener's
+   * rejection is absorbed, and a listener that re-enters the limiter has its
+   * nested events buffered rather than recursing. Failures surface as
+   * `stats().decisionHookErrors`.
+   *
+   * On the hot path — one call per queue entry, delay, admission, retry and
+   * settlement.
+   */
+  readonly onDecision?: (event: Decision) => void;
+
+  /**
    * Source of randomness for retry jitter. Defaults to `Math.random`.
    *
    * The only non-determinism in the library. Inject `createSeededRandom(seed)`
@@ -374,6 +515,25 @@ export interface Limiter {
    * Defaults to the same key `run()` does (`''`).
    */
   inspect(key?: string): KeySnapshot;
+
+  /**
+   * Resolves when every call accepted BEFORE this invocation has settled —
+   * including their queued attempts and retry backoffs.
+   *
+   * **This is not a graceful-shutdown API.** It does not close the limiter and
+   * does not reject new work; calls submitted after it begins are simply not
+   * part of that barrier. Each invocation takes its own snapshot, so repeated
+   * and overlapping drains are independent, and draining an idle limiter
+   * resolves immediately.
+   *
+   * Never rejects, whatever the drained calls did.
+   *
+   * One caveat it cannot fix: a task that ignores its `AbortSignal` after a
+   * timeout is no longer observable, so `drain()` cannot wait for it. A
+   * non-zero `stats().decisionHookErrors` is unrelated, but a timeout in your
+   * logs with work still running afterwards is exactly that case.
+   */
+  drain(): Promise<void>;
 
   /**
    * Configuration that is legal but probably not what you meant — most often a

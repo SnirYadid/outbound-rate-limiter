@@ -289,7 +289,7 @@ describe('onSaturated: reject — hygiene', () => {
     }
 
     expect(new Set(kinds)).toEqual(new Set(['rate']));
-    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0, backingOff: 0});
+    expect(limiter.stats()).toEqual({keys: 1, queued: 0, inflight: 0, backingOff: 0, decisionHookErrors: 0});
     expect(clock.pendingTimers()).toBe(0);
   });
 

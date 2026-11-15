@@ -69,6 +69,7 @@ describe('MANDATORY 8 — safe eviction', () => {
     partition.queue.enqueue({
       cost: 1,
       enqueuedAt: 0,
+      attemptsMade: () => 0,
       isExpired: () => false,
       expire: () => {},
       start: () => {},

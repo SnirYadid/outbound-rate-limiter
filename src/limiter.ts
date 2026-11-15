@@ -16,11 +16,13 @@ import {
   normalizeConstraints,
 } from './constraints.js';
 import {
+  QuotaPilotAbortError,
   QuotaPilotConfigError,
   QuotaPilotQueueFullError,
   QuotaPilotSaturatedError,
 } from './errors.js';
 import {createCall} from './call.js';
+import {createEmitter, sealEvent} from './telemetry.js';
 import {inspectKey, type InspectContext} from './inspect.js';
 import {createPartitionRegistry, type Partition, type QueuedCall} from './partition.js';
 import {defaultRandom} from './random.js';
@@ -30,10 +32,12 @@ import {createSemaphore} from './semaphore.js';
 import {realClock} from './time.js';
 import type {
   AttemptContext,
+  Decision,
   KeySnapshot,
   Limiter,
   LimiterOptions,
   LimiterStats,
+  RefusalReason,
   RunOptions,
 } from './types.js';
 
@@ -74,6 +78,14 @@ export function createLimiter(options: LimiterOptions): Limiter {
   );
   const sweepIntervalMs = sweepOption(options.sweepIntervalMs, defaultSweepIntervalMs);
 
+  const emitter = createEmitter(options.onDecision);
+
+  /**
+   * Every call that has not settled. `drain()` snapshots this, which is what
+   * makes "calls accepted before the drain" an exact set rather than a guess.
+   */
+  const live = new Set<Promise<void>>();
+
   const semaphore = createSemaphore(maxConcurrent);
   const registry = createPartitionRegistry({
     constraints,
@@ -83,8 +95,30 @@ export function createLimiter(options: LimiterOptions): Limiter {
     clock,
   });
 
-  const context: SchedulerContext = {constraints, semaphore, maxConcurrentPerKey, clock};
+  const context: SchedulerContext = {
+    constraints,
+    semaphore,
+    maxConcurrentPerKey,
+    clock,
+    emit: emitter.emit,
+    telemetry: emitter.active,
+  };
   const inspectContext: InspectContext = {constraints, registry, clock};
+
+  /** Reports a refusal the limiter raised before the call became live. */
+  const publishRefusal = (key: string, reason: RefusalReason): void => {
+    if (!emitter.active) return;
+    const event: Decision = {
+      at: clock.now(),
+      key,
+      scope: 'process',
+      kind: 'refused',
+      reason,
+      attempts: 0,
+      elapsedMs: 0,
+    };
+    emitter.emit(sealEvent(event));
+  };
 
   /** Turns a refusal into the error the caller sees, with a usable message. */
   const saturated = (
@@ -129,6 +163,13 @@ export function createLimiter(options: LimiterOptions): Limiter {
       // becoming a promise that never settles.
       assertCostAdmissible(cost, constraints);
 
+      const signal = runOptions?.signal;
+      if (signal !== undefined && typeof signal.addEventListener !== 'function') {
+        throw new QuotaPilotConfigError(
+          'run() signal must be an AbortSignal, or omitted.'
+        );
+      }
+
       const onSaturated = runOptions?.onSaturated ?? 'wait';
       if (onSaturated !== 'wait' && onSaturated !== 'reject') {
         throw new QuotaPilotConfigError(
@@ -147,6 +188,18 @@ export function createLimiter(options: LimiterOptions): Limiter {
       const totalBudgetMs = optionalMs(runOptions?.totalBudgetMs, 'totalBudgetMs');
 
       return new Promise<T>((resolve, reject) => {
+        // An already-aborted signal is answered before the registry is
+        // touched: no partition is created, no capacity is spent, and the
+        // cancellation cannot be confused with a limiter refusal.
+        if (signal?.aborted === true) {
+          publishRefusal(key, 'aborted');
+          reject(
+            signal.reason ??
+              new QuotaPilotAbortError('The call was aborted before it was submitted.', {key})
+          );
+          return;
+        }
+
         // `acquire` throws when the registry is full and nothing is safe to
         // evict. Converted to a rejection because by this point the caller
         // holds a promise, and a mix of sync throws and rejections from one
@@ -155,11 +208,12 @@ export function createLimiter(options: LimiterOptions): Limiter {
         try {
           partition = registry.acquire(key);
         } catch (error) {
+          publishRefusal(key, 'key-limit');
           reject(error);
           return;
         }
 
-        const {call, armDeadline} = createCall<T>(
+        const {call, armDeadline, markQueued, refuse, done} = createCall<T>(
           {
             key,
             cost,
@@ -167,6 +221,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
             retry,
             attemptTimeoutMs,
             totalBudgetMs,
+            signal,
             resolve,
             reject,
           },
@@ -180,26 +235,47 @@ export function createLimiter(options: LimiterOptions): Limiter {
             cancelWake: () => {
               cancelWake(partition);
             },
+            emit: emitter.emit,
+            telemetry: emitter.active,
           }
         );
 
+        // Tracked for `drain()` and removed on settle, whatever the outcome.
+        live.add(done);
+        void done.then(() => {
+          live.delete(done);
+        });
+
         if (onSaturated === 'reject') {
-          rejectOrStart(partition, call, key, reject);
+          rejectOrStart(partition, call, key, refuse);
           return;
         }
 
         if (!partition.queue.enqueue(call)) {
-          reject(
+          refuse(
             new QuotaPilotQueueFullError(
               `Queue for key ${JSON.stringify(key)} is full (${maxQueueDepth} waiting). ` +
                 'Raise maxQueueDepth, slow the producer, or reject earlier — an unbounded ' +
                 'queue would trade this error for unbounded memory.',
               {key}
-            )
+            ),
+            'queue-full'
           );
           return;
         }
 
+        markQueued();
+        if (emitter.active) {
+          emitter.emit(
+            sealEvent({
+              at: clock.now(),
+              key,
+              scope: 'process',
+              kind: 'queued',
+              depth: partition.queue.size,
+            })
+          );
+        }
         armDeadline();
         pump(partition, context);
       });
@@ -210,7 +286,18 @@ export function createLimiter(options: LimiterOptions): Limiter {
       queued: registry.totalQueued(),
       inflight: registry.totalInflight(),
       backingOff: registry.totalBackingOff(),
+      decisionHookErrors: emitter.failures,
     }),
+
+    drain: async () => {
+      // A snapshot, so calls submitted during the drain are not part of this
+      // barrier. Each invocation gets its own, which makes repeated and
+      // overlapping drains independent.
+      //
+      // `done` never rejects, so neither does this: a drain reports that work
+      // has finished, not whether it succeeded.
+      await Promise.all([...live]);
+    },
 
     inspect: (key = ''): KeySnapshot => {
       if (typeof key !== 'string') {
@@ -240,15 +327,16 @@ export function createLimiter(options: LimiterOptions): Limiter {
     partition: Partition,
     call: QueuedCall,
     key: string,
-    reject: (error: unknown) => void
+    refuse: (error: unknown, reason: RefusalReason) => void
   ): void {
     if (!partition.queue.isEmpty) {
-      reject(
+      refuse(
         new QuotaPilotSaturatedError(
           `Key ${JSON.stringify(key)} already has ${partition.queue.size} call(s) queued. ` +
             'Rejecting rather than starting ahead of them, which would break FIFO order.',
           {kind: 'queued-ahead', waitMs: 0, binding: 'queue', key}
-        )
+        ),
+        'saturated'
       );
       return;
     }
@@ -256,7 +344,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
     const outcome = tryAdmit(partition, call.cost, clock.now(), context);
     if (!outcome.admitted) {
       // Nothing was taken (S5), so there is nothing to undo.
-      reject(saturated(outcome, key));
+      refuse(saturated(outcome, key), 'saturated');
       return;
     }
 

@@ -154,3 +154,51 @@ Day 4 (M4): the retry engine.
 ### Not yet implemented
 
 Cancellation (`AbortSignal`), telemetry events, `drain()`.
+
+## 0.1.0-alpha.4 — unreleased
+
+Day 5 (M5): cancellation, telemetry and `drain()`. The feature set is now
+complete for this release line.
+
+### Added
+
+- **`RunOptions.signal`** — `AbortSignal` cancellation, honoured before
+  submission, while queued, while blocked on concurrency, while sleeping
+  between attempts, and mid-attempt. Cancelling before an attempt starts spends
+  no capacity; after, nothing is refunded.
+- **`AttemptContext.signal`** — each attempt gets its own signal, aborted by
+  the caller's signal or by `attemptTimeoutMs`.
+- **`LimiterOptions.onDecision`** and the `Decision` event union: `queued`,
+  `delayed`, `admitted`, `retrying`, `completed`, `refused`. Frozen, all
+  primitive fields, no error objects or payloads.
+- **`Limiter.drain()`** — resolves when every call accepted before the
+  invocation has settled, backoffs included. Not a shutdown API.
+- **`LimiterStats.decisionHookErrors`** — observer failures, counted not logged.
+- Public `RefusalReason` and `DecisionBase` types.
+- New module `src/telemetry.ts` (emitter with reentrancy buffering and failure
+  absorption).
+
+### Fixed
+
+- **A live-call leak.** The queue-full and saturated refusal paths rejected the
+  caller's promise directly instead of going through the call's settle, so the
+  internal completion promise never resolved: `drain()` hung on a call that had
+  already been answered, and the limiter's live-call set grew by one entry per
+  refusal. All refusals now settle through one path.
+- **Dead code in the retry engine.** `decide` chose between `'timeout'` and
+  `'error'` reasons, but a timeout can only reach it when
+  `retryOnAttemptTimeout` is set, which requires a policy. Simplified.
+
+### Changed
+
+- `LimiterStats` gained `decisionHookErrors`; `AttemptContext` gained `signal`.
+  Both additive, both breaking for an exact `toEqual` on those shapes.
+- Documentation no longer references a `stats().abandoned` field. It was
+  designed on Day 1 and deliberately never built: nothing could decrement it,
+  so it would be a leak wearing a metric's clothing. Count `refused` events
+  with `reason: 'timeout'` instead.
+
+### Not yet implemented
+
+`close()`, lint-enforced module layering, a `fetch` adapter, shared/distributed
+state. See docs/GUARANTEES.md, "Not in this release".

@@ -14,19 +14,22 @@
  * and your real ceiling is N times what you configured.
  */
 
-export const VERSION = '0.1.0-alpha.3';
+export const VERSION = '0.1.0-alpha.4';
 
 export {createLimiter} from './limiter.js';
 export type {
   AttemptContext,
   ClassifyContext,
   ConstraintSnapshot,
+  Decision,
+  DecisionBase,
   IntervalUnit,
   KeySnapshot,
   Limiter,
   LimiterOptions,
   LimiterStats,
   RateConstraint,
+  RefusalReason,
   RetryPolicy,
   RunOptions,
   SaturationKind,

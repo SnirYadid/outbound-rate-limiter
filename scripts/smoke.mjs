@@ -96,7 +96,7 @@ assert.deepEqual(results, [0, 2, 4], 'all three calls resolved in order');
 assert.deepEqual(started, ['acct', 'acct', 'acct'], 'context carried the key');
 assert.deepEqual(
   limiter.stats(),
-  {keys: 1, queued: 0, inflight: 0, backingOff: 0},
+  {keys: 1, queued: 0, inflight: 0, backingOff: 0, decisionHookErrors: 0},
   'drained cleanly'
 );
 
@@ -179,7 +179,13 @@ const retried = await retrying.run(
 );
 assert.equal(retried, 'succeeded on 3');
 assert.equal(tries, 3);
-assert.deepEqual(retrying.stats(), {keys: 1, queued: 0, inflight: 0, backingOff: 0});
+assert.deepEqual(retrying.stats(), {
+  keys: 1,
+  queued: 0,
+  inflight: 0,
+  backingOff: 0,
+  decisionHookErrors: 0,
+});
 
 // Exhaustion surfaces the CALLER's error, not a wrapper.
 const permanent = new Error('permanent');
@@ -198,6 +204,57 @@ const timedOut = await retrying
 assert.ok(timedOut instanceof QuotaPilotTimeoutError, 'expected a timeout error');
 assert.equal(timedOut.timeoutMs, 20);
 assert.equal('cause' in timedOut, false, 'a timeout produced no error to carry');
+
+// Cancellation, telemetry and drain, on a real clock.
+const events = [];
+let observerFailures = 0;
+const watched = createLimiter({
+  constraints: [{name: 'w', limit: 500, interval: 'second'}],
+  onDecision: (event) => {
+    events.push(event.kind);
+    // A hostile observer must not change any outcome below.
+    if (event.kind === 'admitted') throw new Error('observer threw');
+    if (event.kind === 'completed') return Promise.reject(new Error('async observer failed'));
+    return undefined;
+  },
+});
+
+assert.equal(await watched.run(() => 'unaffected', {key: 'k'}), 'unaffected');
+assert.deepEqual(events, ['queued', 'admitted', 'completed']);
+observerFailures = watched.stats().decisionHookErrors;
+assert.ok(observerFailures >= 1, 'a throwing observer must be counted');
+
+// Cancellation mid-flight: the slot is freed and nothing is refunded.
+const controller = new AbortController();
+const cancelled = watched
+  .run(({signal}) => new Promise((_resolve, rejectInner) => {
+    signal.addEventListener('abort', () => rejectInner(signal.reason));
+  }), {key: 'k', signal: controller.signal})
+  .then(() => null, (error) => error);
+controller.abort();
+const abortResult = await cancelled;
+assert.ok(abortResult, 'expected a cancellation');
+assert.equal(abortResult.name, 'AbortError');
+assert.equal(watched.stats().inflight, 0, 'the slot must be released on cancellation');
+
+// A pre-aborted signal never reaches the registry.
+const preAborted = new AbortController();
+preAborted.abort();
+const refusedEarly = await watched
+  .run(() => 'never', {key: 'fresh-key', signal: preAborted.signal})
+  .then(() => null, (error) => error);
+assert.ok(refusedEarly, 'expected a refusal');
+
+// drain() waits for accepted work, then the limiter keeps working.
+const slow = watched.run(() => new Promise((r) => realClock.setTimer(() => r('slow'), 30)), {key: 'k'});
+await watched.drain();
+assert.equal(await slow, 'slow', 'drain must wait for accepted work');
+assert.deepEqual(
+  {queued: watched.stats().queued, inflight: watched.stats().inflight, backingOff: watched.stats().backingOff},
+  {queued: 0, inflight: 0, backingOff: 0}
+);
+assert.equal(await watched.run(() => 'after', {key: 'k'}), 'after', 'drain does not close the limiter');
+await watched.drain();
 
 console.log('esm ok, version', VERSION);
 `
@@ -278,6 +335,8 @@ assert.equal(createSeededRandom(2)(), createSeededRandom(2)());
 import type {
   AttemptContext,
   ClassifyContext,
+  Decision,
+  RefusalReason,
   ConstraintSnapshot,
   KeySnapshot,
   Limiter,
@@ -305,6 +364,12 @@ const policy: RetryPolicy = {
     context.timedOut || error === null ? {retry: false} : {retry: true, afterMs: 250},
 };
 const retried: Promise<string> = limiter.run(() => 'x', {key: 'acct', retry: policy});
+const reasons: RefusalReason[] = ['saturated', 'budget', 'aborted', 'timeout'];
+const observer: (event: Decision) => void = (event) => void event.kind;
+const withSignal: RunOptions = {signal: new AbortController().signal};
+const drained: Promise<void> = limiter.drain();
+const errorCount: number = limiter.stats().decisionHookErrors;
+const ctxSignal: (ctx: AttemptContext) => AbortSignal = (ctx) => ctx.signal;
 const version: string = VERSION;
 const error: Error = new QuotaPilotConfigError('nope');
 export {
@@ -318,6 +383,12 @@ export {
   kinds,
   policy,
   retried,
+  reasons,
+  observer,
+  withSignal,
+  drained,
+  errorCount,
+  ctxSignal,
   version,
   error,
 };

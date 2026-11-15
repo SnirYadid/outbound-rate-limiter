@@ -24,6 +24,8 @@ export interface QueuedCall {
   readonly cost: number;
   /** Clock reading when the call first entered the queue. */
   readonly enqueuedAt: number;
+  /** Attempts started so far. Read by the scheduler for telemetry. */
+  readonly attemptsMade: () => number;
   /**
    * True when the call's total budget has run out.
    *

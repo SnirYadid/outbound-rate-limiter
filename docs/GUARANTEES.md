@@ -225,6 +225,96 @@ operational problems.
 
 ---
 
+## Cancellation
+
+Pass an `AbortSignal` as `RunOptions.signal`. It is honoured in every state:
+
+| State when the abort lands | What is released | Capacity |
+|---|---|---|
+| Before submission (already aborted) | nothing — no partition is even created | none spent |
+| Queued | the queue entry, the budget deadline, a stale rate wake | none spent |
+| Blocked on concurrency | same as queued | none spent |
+| Sleeping between attempts | the backoff timer and the partition claim | the failed attempt's stays spent |
+| An attempt running | the concurrency slot and the attempt's timeout; the attempt's own signal is aborted | **not refunded** |
+
+| | Guarantee |
+|---|---|
+| **C1** | Cancelling before an attempt starts consumes no rate capacity. |
+| **C2** | Cancelling after one starts refunds nothing. The request was sent (G7). |
+| **C3** | Each logical call settles exactly once, however abort, timeout, retry and completion interleave. |
+| **C4** | Every path releases its resources exactly once — queue entry, timers, partition claim, concurrency accounting and the abort listener. |
+| **C5** | A cancelled call stops its retry sequence; no further attempt is made. |
+| **C6** | The rejection is the signal's own `reason` when it has one, otherwise `QuotaPilotAbortError`. Either way `error.name === 'AbortError'`. |
+
+Each attempt also receives its own `AbortSignal` on `AttemptContext`, aborted
+by your signal **or** by `attemptTimeoutMs`. Thread it into whatever you call.
+
+### Ordering: a same-turn abort wins
+
+Resolving a promise schedules its continuation as a **microtask**; `abort()`
+dispatches synchronously. So an abort issued in the same turn as a resolution
+arrives first and the call rejects; an abort issued after the microtask has run
+is inert. Both are pinned by tests — it reads like a coin toss and is not.
+
+---
+
+## Telemetry
+
+Pass `onDecision` to receive one event per scheduler decision. Six kinds:
+
+| Kind | Says | Carries |
+|---|---|---|
+| `queued` | the call joined its key's queue | `depth` |
+| `delayed` | the scheduler stopped to wait | `cause`, `binding`, `waitMs`, `attempt` |
+| `admitted` | an attempt started; capacity is spent | `attempt`, `cost`, `waitedMs` |
+| `retrying` | an attempt failed, another is scheduled | `attempt`, `delayMs`, `source` |
+| `completed` | the call resolved | `attempts`, `elapsedMs` |
+| `refused` | the call rejected | `reason`, `attempts`, `elapsedMs` |
+
+`refused` covers cancellation too, as `reason: 'aborted'`.
+
+| | Guarantee |
+|---|---|
+| **T1** | Events are emitted **after** the transition they describe has committed, so a listener never observes half-made state. |
+| **T2** | Events are frozen, and every field is a primitive — so the freeze is complete, not shallow. |
+| **T3** | **No errors or payloads.** Your classifier already saw the error; putting it here would route request bodies into your telemetry. |
+| **T4** | A listener that throws is caught and counted. It cannot abandon a pump loop. |
+| **T5** | An `async` listener's rejected promise is absorbed and counted, not left to become an unhandled rejection. |
+| **T6** | A listener that re-enters the limiter has its nested events buffered and flushed by the outer call, so recursion depth stays at one. |
+| **T7** | Failures are reported as `stats().decisionHookErrors`. The library writes nothing to the console. |
+
+`cause` on a `delayed` event is never `'queued-ahead'` — that is a refusal, not
+a delay. `binding` names a rate constraint for `cause: 'rate'`, and the option
+(`maxConcurrent` / `maxConcurrentPerKey`) otherwise.
+
+---
+
+## `drain()`
+
+```ts
+await limiter.drain();
+```
+
+Resolves when every call accepted **before** this invocation has settled,
+including their queued attempts and retry backoffs. Never rejects — it reports
+that work finished, not whether it succeeded.
+
+**This is not a graceful-shutdown API.** It does not close the limiter and does
+not reject new work. There is no `close()`: a caller who wants to stop
+accepting work stops calling `run()`.
+
+- Calls submitted after a drain begins are **not** part of that barrier.
+- Each invocation takes its own snapshot, so repeated and overlapping drains
+  are independent.
+- Draining an idle limiter resolves immediately.
+
+**It inherits the liveness of your tasks.** A task that never settles, with no
+`attemptTimeoutMs` and no signal, holds a drain open forever — correctly, since
+the work genuinely has not finished. If a drain hangs, look for an unbounded
+task before suspecting the limiter.
+
+---
+
 ## Guarantees conditional on cooperative cancellation
 
 `attemptTimeoutMs` aborts the `AbortSignal` handed to your function and stops
@@ -235,18 +325,23 @@ The consequences are bounded and named:
 
 | | Behaviour |
 |---|---|
-| **Concurrency slot** | Released at the timeout, not when the abandoned promise finally settles. |
+| **Concurrency slot** | Released at the timeout, not when the abandoned promise finally settles. The same applies to cancellation: the slot is freed when the abort lands, not when the task notices. |
 | **Why** | Holding the slot would be more faithful to reality, but one function that never settles would then deadlock the limiter permanently. A misbehaving task should degrade the bound, not stop the world. |
-| **`maxConcurrent`** | **Conditional.** It bounds attempts QuotaPilot can observe. Real concurrency may exceed it by the number of abandoned attempts, reported as `stats().abandoned`. |
+| **`maxConcurrent`** | **Conditional.** It bounds attempts QuotaPilot can **observe**. A task that ignores its signal after a timeout or a cancellation keeps running physically, so real concurrency may exceed the cap by the number of such tasks. QuotaPilot asks; it cannot compel. |
 | **Capacity (G2)** | **Not conditional.** The abandoned attempt consumed its cost at admission and is never refunded. |
-| **Late completion** | Discarded. It cannot return a value to the caller and cannot affect control flow. It emits a `settled` event with `late: true` so you can see it happened, and its rejection is swallowed so an abandoned promise cannot crash the process with an unhandled rejection. |
-| **`drain()`** | **Conditional.** Resolves when queues are empty, observable in-flight work is zero, and no timers are pending. It cannot wait for abandoned promises — they may never settle — so a non-zero `stats().abandoned` after `drain()` means work may still be running. |
+| **Late completion** | Discarded. It cannot return a value to the caller and cannot affect control flow, and its rejection is absorbed so an abandoned promise cannot crash the process with an unhandled rejection. No event is emitted for it: the call already reported its outcome, and a second terminal event would make the stream lie about how many calls there were. |
+| **`drain()`** | **Conditional.** It waits for calls it can still observe. An attempt abandoned at its timeout is no longer observable, so a drain can resolve while that work is physically still running. |
 | **Liveness** | Not conditional, precisely because the slot is released. |
 
 The practical advice: thread the provided signal into whatever you call. If you
-cannot, set `attemptTimeoutMs` generously or leave it unset, and read
-`stats().abandoned` as the measure of how often you are exceeding your real
-concurrency bound.
+cannot, set `attemptTimeoutMs` generously or leave it unset.
+
+There is deliberately no `stats().abandoned`. Such a counter could only ever
+grow — an abandoned task may never settle, so nothing could decrement it — and
+a number that only rises is a leak wearing a metric's clothing. Count
+`refused` events with `reason: 'timeout'` in your telemetry instead: that is
+exactly how often QuotaPilot gave up on an attempt, and it is a real
+measurement rather than a running total of regrets.
 
 ---
 

@@ -16,18 +16,17 @@ npm install quota-pilot
 
 ---
 
-## Status: 0.1.0-alpha — scheduling works, retries do not yet
+## Status: 0.1.0-alpha — feature-complete, hardening next
 
 **Available now:** multi-constraint weighted token buckets, per-key
 partitioning with provably safe eviction, global and per-key concurrency caps,
 bounded per-key FIFO queues with documented cross-key fairness, classified
 retries with backoff and provider wait hints, per-attempt timeouts, total
-budgets, and the full error taxonomy.
+budgets, `AbortSignal` cancellation, structured decision telemetry, `drain()`,
+and the full error taxonomy.
 
-**Not here yet:** cancellation via `AbortSignal`, telemetry events, and
-`drain()`. Each is an additive change to the surface below — types describing
-unbuilt behaviour are deliberately *not* exported, because a published type is
-a promise.
+**Still to come before 1.0:** hardening, lint-enforced module layering, and
+docs. No new features are planned for this release line.
 
 ```ts
 import {createLimiter, QuotaPilotSaturatedError} from 'quota-pilot';
@@ -89,6 +88,48 @@ A provider's own `afterMs` is used verbatim — never jittered, never shortened
 by `maxDelayMs`. Only the total budget can override it, and then the call is
 refused rather than sleeping past its deadline. On ordinary exhaustion **your**
 error surfaces unchanged, so `instanceof` and `.status` checks keep working.
+
+Cancel a call at any point in its life — queued, rate-blocked, mid-backoff or
+mid-attempt:
+
+```ts
+const controller = new AbortController();
+const page = limiter.run(({signal}) => fetchPage(url, {signal}), {
+  key: credentialId,
+  signal: controller.signal,
+});
+controller.abort();  // rejects with the signal's own reason
+```
+
+Cancelling before an attempt starts spends no capacity. Cancelling after one
+starts refunds nothing — the request was sent.
+
+Ask why anything happened:
+
+```ts
+const limiter = createLimiter({
+  constraints,
+  onDecision(event) {
+    if (event.kind === 'delayed') {
+      log.info(`waited on ${event.binding} for ${event.waitMs}ms`);
+    }
+  },
+});
+```
+
+Six event kinds — `queued`, `delayed`, `admitted`, `retrying`, `completed`,
+`refused` — all frozen, all primitives, and deliberately carrying **no error
+objects or payloads**. A listener that throws, rejects, or re-enters the
+limiter cannot change any outcome; failures surface as
+`stats().decisionHookErrors`.
+
+Wait for accepted work to finish:
+
+```ts
+await limiter.drain();
+```
+
+A barrier, not a shutdown: it does not close the limiter or reject new work.
 
 And read capacity without spending any:
 
