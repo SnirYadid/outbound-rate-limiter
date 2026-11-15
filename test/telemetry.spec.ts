@@ -673,13 +673,11 @@ describe('telemetry — costs nothing when nobody is watching', () => {
     return clock.reads();
   };
 
-  // KNOWN FAILURE, deliberately recorded rather than hidden. `call.ts`'s
-  // `publish` takes an already-constructed event and only then checks
-  // `env.telemetry`, so the `admitted` and `completed` events are built and
-  // thrown away — the reads come out equal. `it.fails` asserts that it still
-  // fails, so this flips to a plain `it` as part of fixing it, and cannot be
-  // forgotten.
-  it.fails('reads the clock less when no listener is attached', async () => {
+  // This was `it.fails` until `emitter.publish(build)` landed: `call.ts` used
+  // to build the event and only then check whether anybody was listening, so
+  // the reads came out equal. Now the builder is a thunk the emitter never
+  // invokes when inactive.
+  it('reads the clock less when no listener is attached', async () => {
     const withListener = await readsForRejectPath(() => undefined);
     const without = await readsForRejectPath(undefined);
 
@@ -745,11 +743,38 @@ describe('telemetry — costs nothing when nobody is watching', () => {
 });
 
 describe('emitter — unit', () => {
-  it('is inert and reports no failures without a listener', () => {
+  it('is inert without a listener, and never calls the builder', () => {
+    // The gate is the emitter's own business now, so this asserts the
+    // behaviour rather than a flag: `publish` must discard its builder
+    // unevaluated, which is what makes telemetry free when nobody watches.
     const emitter = createEmitter(undefined);
-    expect(emitter.active).toBe(false);
+    let built = 0;
+
+    emitter.publish(() => {
+      built++;
+      return {at: 0, key: 'k', scope: 'process', kind: 'queued', depth: 1};
+    });
     emitter.emit(sealEvent({at: 0, key: 'k', scope: 'process', kind: 'queued', depth: 1}));
+
+    expect(built).toBe(0);
     expect(emitter.failures).toBe(0);
+  });
+
+  it('calls the builder exactly once per publish, and seals the result', () => {
+    const seen: Decision[] = [];
+    const emitter = createEmitter((event) => void seen.push(event));
+    let built = 0;
+
+    emitter.publish(() => {
+      built++;
+      // Deliberately NOT pre-sealed: sealing is the emitter's job.
+      return {at: 7, key: 'k', scope: 'process', kind: 'queued', depth: 2};
+    });
+
+    expect(built).toBe(1);
+    expect(seen).toHaveLength(1);
+    expect(Object.isFrozen(seen[0])).toBe(true);
+    expect(seen[0]).toMatchObject({at: 7, depth: 2});
   });
 
   it('flushes nested emissions in order after the outer call', () => {

@@ -21,16 +21,16 @@
 
 import {tryAdmit, type AdmitContext} from './admit.js';
 import type {Partition} from './partition.js';
-import {sealEvent} from './telemetry.js';
 import type {Clock} from './time.js';
 import type {Decision, SaturationKind} from './types.js';
 
 export interface SchedulerContext extends AdmitContext {
   readonly clock: Clock;
-  /** Publishes a decision event. Never throws. */
-  readonly emit: (event: Decision) => void;
-  /** True when a listener is attached, so events are built only if watched. */
-  readonly telemetry: boolean;
+  /**
+   * Publishes a decision event, building it only if somebody is listening.
+   * Never throws, and the builder is not called when no listener is attached.
+   */
+  readonly publish: (build: () => Decision) => void;
 }
 
 /**
@@ -125,8 +125,7 @@ function publishDelay(
   attempt: number,
   detail: {cause: SaturationKind; binding: string; waitMs: number}
 ): void {
-  if (!context.telemetry) return;
-  const event: Decision = {
+  context.publish(() => ({
     at: context.clock.now(),
     key: partition.key,
     scope: 'process',
@@ -135,8 +134,7 @@ function publishDelay(
     binding: detail.binding,
     waitMs: detail.waitMs,
     attempt,
-  };
-  context.emit(sealEvent(event));
+  }));
 }
 
 /**

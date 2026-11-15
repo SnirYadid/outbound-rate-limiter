@@ -29,7 +29,7 @@ import {
   QuotaPilotSaturatedError,
 } from './errors.js';
 import {createCall} from './call.js';
-import {createEmitter, sealEvent} from './telemetry.js';
+import {createEmitter} from './telemetry.js';
 import {inspectKey, type InspectContext} from './inspect.js';
 import {createPartitionRegistry, type Partition, type QueuedCall} from './partition.js';
 import {defaultRandom} from './random.js';
@@ -39,7 +39,6 @@ import {createSemaphore} from './semaphore.js';
 import {realClock} from './time.js';
 import type {
   AttemptContext,
-  Decision,
   KeySnapshot,
   Limiter,
   LimiterOptions,
@@ -107,17 +106,15 @@ export function createLimiter(options: LimiterOptions): Limiter {
     semaphore,
     maxConcurrentPerKey,
     clock,
-    emit: (event) => {
-      emitter.emit(event);
+    publish: (build) => {
+      emitter.publish(build);
     },
-    telemetry: emitter.active,
   };
   const inspectContext: InspectContext = {constraints, registry, clock};
 
   /** Reports a refusal the limiter raised before the call became live. */
   const publishRefusal = (key: string, reason: RefusalReason): void => {
-    if (!emitter.active) return;
-    const event: Decision = {
+    emitter.publish(() => ({
       at: clock.now(),
       key,
       scope: 'process',
@@ -125,8 +122,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
       reason,
       attempts: 0,
       elapsedMs: 0,
-    };
-    emitter.emit(sealEvent(event));
+    }));
   };
 
   /** Turns a refusal into the error the caller sees, with a usable message. */
@@ -251,10 +247,9 @@ export function createLimiter(options: LimiterOptions): Limiter {
             cancelWake: () => {
               cancelWake(partition);
             },
-            emit: (event) => {
-              emitter.emit(event);
+            publish: (build) => {
+              emitter.publish(build);
             },
-            telemetry: emitter.active,
           }
         );
 
@@ -283,17 +278,13 @@ export function createLimiter(options: LimiterOptions): Limiter {
         }
 
         markQueued();
-        if (emitter.active) {
-          emitter.emit(
-            sealEvent({
-              at: clock.now(),
-              key,
-              scope: 'process',
-              kind: 'queued',
-              depth: partition.queue.size,
-            })
-          );
-        }
+        emitter.publish(() => ({
+          at: clock.now(),
+          key,
+          scope: 'process',
+          kind: 'queued',
+          depth: partition.queue.size,
+        }));
         armDeadline();
         pump(partition, context);
       });

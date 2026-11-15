@@ -52,7 +52,6 @@
 import {QuotaPilotAbortError, QuotaPilotBudgetError, QuotaPilotTimeoutError} from './errors.js';
 import type {Partition, QueuedCall} from './partition.js';
 import {computeBackoffMs, providerHintMs, type NormalizedRetryPolicy} from './retry.js';
-import {sealEvent} from './telemetry.js';
 import type {RandomFn} from './random.js';
 import type {Release} from './semaphore.js';
 import type {Clock} from './time.js';
@@ -82,10 +81,11 @@ export interface CallEnvironment {
    * wrong for the new one, so it is discarded and the pump recomputes.
    */
   readonly cancelWake: () => void;
-  /** Publishes a decision event. Never throws. */
-  readonly emit: (event: Decision) => void;
-  /** True when a listener is attached, so events are built only if watched. */
-  readonly telemetry: boolean;
+  /**
+   * Publishes a decision event, building it only if somebody is listening.
+   * Never throws, and the builder is not called when no listener is attached.
+   */
+  readonly publish: (build: () => Decision) => void;
 }
 
 export interface BuiltCall {
@@ -111,7 +111,7 @@ export interface BuiltCall {
 }
 
 export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCall {
-  const {clock, random, partition} = env;
+  const {clock, random, partition, publish} = env;
   const startedAt = clock.now();
 
   let attempts = 0;
@@ -142,10 +142,6 @@ export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCal
     key: spec.key,
     scope: 'process',
   });
-
-  const publish = (event: Decision): void => {
-    if (env.telemetry) env.emit(sealEvent(event));
-  };
 
   const cancelDeadline = (): void => {
     if (deadlineTimer === undefined) return;
@@ -179,14 +175,14 @@ export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCal
 
   const settleResolved = (value: T): void => {
     settle(() => {
-      publish({...base(), kind: 'completed', attempts, elapsedMs: elapsed()});
+      publish(() => ({...base(), kind: 'completed', attempts, elapsedMs: elapsed()}));
       spec.resolve(value);
     });
   };
 
   const settleRejected = (error: unknown, reason: RefusalReason): void => {
     settle(() => {
-      publish({...base(), kind: 'refused', reason, attempts, elapsedMs: elapsed()});
+      publish(() => ({...base(), kind: 'refused', reason, attempts, elapsedMs: elapsed()}));
       spec.reject(error);
     });
   };
@@ -265,7 +261,7 @@ export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCal
       env.repump();
     }, delayMs);
 
-    publish({...base(), kind: 'retrying', attempt: attempts, delayMs, source});
+    publish(() => ({...base(), kind: 'retrying', attempt: attempts, delayMs, source}));
   };
 
   /**
@@ -520,13 +516,13 @@ export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCal
       }, timeoutMs);
     }
 
-    publish({
+    publish(() => ({
       ...base(),
       kind: 'admitted',
       attempt: attemptNumber,
       cost: spec.cost,
       waitedMs: elapsed(),
-    });
+    }));
 
     const attemptContext: AttemptContext = {
       key: spec.key,

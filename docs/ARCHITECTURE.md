@@ -55,6 +55,14 @@ because the import would look innocent and the reason it matters is not local.
 first keeps the error classes from being a second, competing source of truth
 about what the library's nouns are.
 
+**Only `limiter` imports `telemetry`.** `call` and `scheduler` both emit
+events, but neither knows the emitter exists: each receives a
+`publish(build)` function in its context object. They used to import the
+module for `sealEvent`, which meant three modules shared the job of gating,
+building and freezing an event, and one of them did it in the wrong order.
+The emitter now owns all three, so the only thing that crosses the boundary is
+a thunk.
+
 ---
 
 ## What enforces it

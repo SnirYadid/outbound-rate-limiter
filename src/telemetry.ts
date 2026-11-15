@@ -28,12 +28,24 @@
 import type {Decision} from './types.js';
 
 export interface Emitter {
-  /** Publishes one event. Never throws. */
+  /**
+   * Publishes one event, building it only if somebody is listening.
+   *
+   * This is the only sanctioned way to emit. `build` is called at most once,
+   * never when no listener is attached, and its result is sealed before it is
+   * handed out — so a caller cannot forget the gate or the freeze, and
+   * `onDecision` costs nothing when nobody is watching.
+   *
+   * Never throws, whatever the listener does.
+   */
+  publish(build: () => Decision): void;
+  /**
+   * Publishes an already-built event. For callers that have one in hand, such
+   * as a test driving the emitter directly.
+   */
   emit(event: Decision): void;
   /** How many listener invocations have failed, synchronously or otherwise. */
   readonly failures: number;
-  /** True when a listener was supplied, so callers can skip building events. */
-  readonly active: boolean;
 }
 
 type Listener = (event: Decision) => void;
@@ -42,14 +54,15 @@ export function createEmitter(listener: Listener | undefined): Emitter {
   let failures = 0;
 
   if (listener === undefined) {
-    // No listener: `emit` is a no-op and callers short-circuit on `active`,
-    // so telemetry costs nothing when nobody is watching.
+    // No listener: nothing is built and nothing is delivered. `publish`
+    // discarding its builder unevaluated is what makes telemetry free when
+    // nobody is watching.
     return {
+      publish: () => undefined,
       emit: () => undefined,
       get failures() {
         return 0;
       },
-      active: false,
     };
   }
 
@@ -75,31 +88,42 @@ export function createEmitter(listener: Listener | undefined): Emitter {
     }
   };
 
+  const emit = (event: Decision): void => {
+    // Sealed here, at the single exit, rather than by each caller. Every
+    // `Decision` field is a primitive by design, so this shallow freeze is a
+    // complete one, and doing it in one place means a new emission site cannot
+    // hand out a mutable event by forgetting a step.
+    const sealed = sealEvent(event);
+
+    if (delivering) {
+      // Re-entrant: a listener triggered another event. Queue it and let the
+      // outer call flush it, so recursion depth stays at one. Buffered events
+      // are already sealed, so the flush below cannot bypass the freeze.
+      pending.push(sealed);
+      return;
+    }
+    delivering = true;
+    try {
+      deliver(sealed);
+      // `deliver` never throws, so this loop always terminates and the
+      // buffer always empties.
+      while (pending.length > 0) {
+        // Non-empty by the loop condition, as in semaphore.ts.
+        deliver(pending.shift()!);
+      }
+    } finally {
+      delivering = false;
+    }
+  };
+
   return {
-    emit: (event) => {
-      if (delivering) {
-        // Re-entrant: a listener triggered another event. Queue it and let the
-        // outer call flush it, so recursion depth stays at one.
-        pending.push(event);
-        return;
-      }
-      delivering = true;
-      try {
-        deliver(event);
-        // `deliver` never throws, so this loop always terminates and the
-        // buffer always empties.
-        while (pending.length > 0) {
-          // Non-empty by the loop condition, as in semaphore.ts.
-          deliver(pending.shift()!);
-        }
-      } finally {
-        delivering = false;
-      }
+    publish: (build) => {
+      emit(build());
     },
+    emit,
     get failures() {
       return failures;
     },
-    active: true,
   };
 }
 
@@ -118,6 +142,9 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
  * complete one — there is no nested object a listener could reach through and
  * mutate. A test asserts that property, because it is what makes the shallow
  * freeze sufficient.
+ *
+ * Called by `emit`, at the emitter's single exit. Exported because the tests
+ * that drive the emitter directly construct their own events.
  */
 export function sealEvent<T extends Decision>(event: T): T {
   return Object.freeze(event);
