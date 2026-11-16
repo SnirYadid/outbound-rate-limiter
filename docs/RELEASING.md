@@ -14,13 +14,13 @@ publisher configuration expires if its first publish does not succeed within
 
 Nothing in this list is automated, because all of it happens outside the repo.
 
-- [ ] Create the repository. **Public** — npm provenance attestations require a
+- [x] Create the repository. **Public** — npm provenance attestations require a
       public repository and a public package.
-- [ ] Decide the owner and name. The package is `quota-pilot`; matching the
-      repository name to it keeps the npm page, the badge URLs and the
-      provenance link consistent.
-- [ ] `git remote add origin git@github.com:<owner>/quota-pilot.git`
-- [ ] Replace `REPLACE_ME_OWNER` in `package.json` (`repository`, `homepage`,
+      → `github.com/SnirYadid/quota-pilot`
+- [x] Owner and name decided. The repository name matches the package name, so
+      the npm page, the badge URLs and the provenance link all agree.
+- [x] `git remote add origin https://github.com/SnirYadid/quota-pilot.git`
+- [x] Placeholder replaced in `package.json` (`repository`, `homepage`,
       `bugs`). `npm run preflight` fails while any placeholder remains, and the
       release workflow runs it.
 - [ ] Push `main`. Confirm the CI workflow runs green on Node 22, 24 and 26.
