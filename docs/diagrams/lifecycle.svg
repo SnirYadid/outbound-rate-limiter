@@ -1,0 +1,226 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1052" width="1080" height="1052" role="img" aria-labelledby="diagram-title diagram-desc">
+<title id="diagram-title">The lifecycle of one QuotaPilot call</title>
+<desc id="diagram-desc">A call enters limiter.run and is validated synchronously, then acquires its key's partition. Under the default onSaturated 'wait' it joins that key's bounded FIFO queue; under 'reject' it skips the queue and either starts now or fails now. The pump offers the head of the queue to atomic admission, which checks per-key concurrency, every weighted rate constraint and the global concurrency slot in one synchronous step with no await, and either commits all of them together or takes nothing. An admitted attempt runs with its own AbortSignal and optional per-attempt timeout. A failure is classified by the caller; a retry backs off, holds neither a slot nor a queue entry while it sleeps, and re-enters the tail of the same queue through normal admission.</desc>
+
+<style>
+  :root {
+    --text: #1f2328;
+    --muted: #59636e;
+    --line: #6e7781;
+    --node-fill: #ffffff;
+    --node-stroke: #d1d9e0;
+    --group-fill: #f0f6ff;
+    --group-stroke: #a6c8ff;
+    --accent: #0969da;
+    --accent-text: #0a3069;
+    --err-fill: #fff5f5;
+    --err-stroke: #e5a2a2;
+    --err-text: #a40e26;
+    --err-line: #cf4b5c;
+    --ok-fill: #effaf3;
+    --ok-stroke: #9fd3b0;
+    --ok-text: #0a6b2d;
+    --ok-line: #2f9e55;
+    --loop: #8250df;
+    --note-fill: #f6f8fa;
+    --note-stroke: #d1d9e0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --text: #e6edf3;
+      --muted: #9198a1;
+      --line: #7d8590;
+      --node-fill: #161b22;
+      --node-stroke: #3d444d;
+      --group-fill: #0d1b2f;
+      --group-stroke: #2a5a9e;
+      --accent: #4493f8;
+      --accent-text: #9ecbff;
+      --err-fill: #2a1215;
+      --err-stroke: #6e2c35;
+      --err-text: #ff9a9a;
+      --err-line: #b4535f;
+      --ok-fill: #0d2117;
+      --ok-stroke: #2f5f3f;
+      --ok-text: #4ac26b;
+      --ok-line: #3b8c56;
+      --loop: #b083f0;
+      --note-fill: #161b22;
+      --note-stroke: #3d444d;
+    }
+  }
+  text { font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: var(--text); }
+  .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  .n { font-size: 13px; }
+  .s { font-size: 11.5px; fill: var(--muted); }
+  .lbl { font-size: 11px; fill: var(--muted); }
+  .hd { font-size: 10.5px; font-weight: 700; fill: var(--accent-text); }
+  .box { fill: var(--node-fill); stroke: var(--node-stroke); stroke-width: 1.5; }
+  .dec { fill: var(--node-fill); stroke: var(--accent); stroke-width: 1.5; }
+  .err { fill: var(--err-fill); stroke: var(--err-stroke); stroke-width: 1.5; }
+  .errt { fill: var(--err-text); font-size: 12.5px; font-weight: 600; }
+  .ok { fill: var(--ok-fill); stroke: var(--ok-stroke); stroke-width: 1.5; }
+  .okt { fill: var(--ok-text); font-size: 13px; font-weight: 600; }
+  .grp { fill: var(--group-fill); stroke: var(--group-stroke); stroke-width: 1.5; stroke-dasharray: 5 4; }
+  .note { fill: var(--note-fill); stroke: var(--note-stroke); stroke-width: 1.5; }
+  .a { stroke: var(--line); stroke-width: 1.6; fill: none; marker-end: url(#ar); }
+  .ae { stroke: var(--err-line); stroke-width: 1.6; fill: none; marker-end: url(#are); }
+  .ao { stroke: var(--ok-line); stroke-width: 1.8; fill: none; marker-end: url(#aro); }
+  .al { stroke: var(--loop); stroke-width: 1.6; fill: none; stroke-dasharray: 6 4; marker-end: url(#arl); }
+  .mk { fill: var(--line); }
+  .mke { fill: var(--err-line); }
+  .mko { fill: var(--ok-line); }
+  .mkl { fill: var(--loop); }
+</style>
+
+<defs>
+  <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk"/></marker>
+  <marker id="are" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mke"/></marker>
+  <marker id="aro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mko"/></marker>
+  <marker id="arl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mkl"/></marker>
+</defs>
+
+<rect class="grp" x="240" y="452" width="380" height="188" rx="12"/>
+<text class="hd" x="258" y="473" text-anchor="start">ATOMIC ADMISSION — ONE SYNCHRONOUS STEP, NO await</text>
+
+<rect class="dec" x="260" y="16" width="340" height="46" rx="23"/>
+<text class="n mono" x="430" y="44" text-anchor="middle">limiter.run(fn, options)</text>
+
+<rect class="dec" x="260" y="86" width="340" height="46" rx="8"/>
+<text class="n" x="430" y="114" text-anchor="middle">options valid?</text>
+
+<rect class="box" x="260" y="156" width="340" height="46" rx="8"/>
+<text class="n" x="430" y="184" text-anchor="middle">acquire this key's partition</text>
+
+<rect class="dec" x="260" y="226" width="340" height="46" rx="8"/>
+<text class="n mono" x="430" y="254" text-anchor="middle">onSaturated?</text>
+
+<rect class="box" x="260" y="296" width="340" height="58" rx="8"/>
+<text class="n" x="430" y="320" text-anchor="middle">per-key FIFO queue</text>
+<text class="s" x="430" y="338" text-anchor="middle">bounded by maxQueueDepth</text>
+
+<rect class="box" x="260" y="388" width="340" height="46" rx="8"/>
+<text class="n" x="430" y="409" text-anchor="middle">pump — this key's head</text>
+<text class="s" x="430" y="426" text-anchor="middle">strict FIFO; keys never block each other</text>
+
+<rect class="box" x="262" y="486" width="336" height="86" rx="8"/>
+<text class="s" x="282" y="511" text-anchor="start">1. per-key concurrency</text>
+<text class="s" x="282" y="530" text-anchor="start">2. every rate constraint, weighted by cost</text>
+<text class="s" x="282" y="549" text-anchor="start">3. global concurrency slot</text>
+
+<rect class="box" x="262" y="586" width="336" height="42" rx="8"/>
+<text class="n" x="430" y="612" text-anchor="middle">debit every bucket, hold the slot</text>
+
+<rect class="box" x="260" y="656" width="340" height="58" rx="8"/>
+<text class="n mono" x="430" y="680" text-anchor="middle">fn(AttemptContext)</text>
+<text class="s" x="430" y="698" text-anchor="middle">its own AbortSignal + attemptTimeoutMs</text>
+
+<rect class="dec" x="260" y="748" width="340" height="46" rx="8"/>
+<text class="n mono" x="430" y="770" text-anchor="middle">classify(error, context)</text>
+<text class="s" x="430" y="787" text-anchor="middle">yours — QuotaPilot ships no default</text>
+
+<rect class="box" x="260" y="828" width="340" height="58" rx="8"/>
+<text class="n" x="430" y="852" text-anchor="middle">backoff with full jitter</text>
+<text class="s" x="430" y="870" text-anchor="middle">a provider's Retry-After is used verbatim</text>
+
+<rect class="box" x="260" y="912" width="340" height="72" rx="8"/>
+<text class="n" x="430" y="936" text-anchor="middle">re-enters the queue TAIL</text>
+<text class="s" x="430" y="954" text-anchor="middle">while sleeping: no slot, no queue entry</text>
+<text class="s" x="430" y="972" text-anchor="middle">then back through normal admission — a retry pays again</text>
+
+<rect class="box" x="40" y="486" width="180" height="104" rx="8"/>
+<text class="n" x="130" y="510" text-anchor="middle">blocked — it waits</text>
+<text class="s" x="130" y="533" text-anchor="middle">for exactly one wake:</text>
+<text class="s" x="130" y="551" text-anchor="middle">a rate timer, a freed slot,</text>
+<text class="s" x="130" y="569" text-anchor="middle">or this key's own completion</text>
+
+<rect class="ok" x="40" y="660" width="180" height="50" rx="8"/>
+<text class="okt" x="130" y="690" text-anchor="middle">call resolves</text>
+
+<rect class="err" x="660" y="86" width="400" height="46" rx="8"/>
+<text class="errt mono" x="680" y="107" text-anchor="start">QuotaPilotConfigError</text>
+<text class="s" x="680" y="123" text-anchor="start">thrown synchronously, before any promise exists</text>
+
+<rect class="err" x="660" y="156" width="400" height="46" rx="8"/>
+<text class="errt mono" x="680" y="177" text-anchor="start">QuotaPilotKeyLimitError</text>
+<text class="s" x="680" y="193" text-anchor="start">maxKeys reached and nothing is safe to evict</text>
+
+<rect class="err" x="660" y="302" width="400" height="46" rx="8"/>
+<text class="errt mono" x="680" y="323" text-anchor="start">QuotaPilotQueueFullError</text>
+<text class="s" x="680" y="339" text-anchor="start">this key already has maxQueueDepth waiting</text>
+
+<rect class="err" x="660" y="388" width="400" height="46" rx="8"/>
+<text class="errt mono" x="680" y="409" text-anchor="start">QuotaPilotBudgetError</text>
+<text class="s" x="680" y="425" text-anchor="start">the wait, or the next backoff, passes totalBudgetMs</text>
+
+<rect class="err" x="660" y="520" width="400" height="60" rx="8"/>
+<text class="errt mono" x="680" y="541" text-anchor="start">QuotaPilotSaturatedError</text>
+<text class="s" x="680" y="557" text-anchor="start">only under onSaturated: 'reject'. kind names what blocked:</text>
+<text class="s" x="680" y="573" text-anchor="start">rate, concurrency, key-concurrency, queued-ahead</text>
+
+<rect class="err" x="660" y="656" width="400" height="46" rx="8"/>
+<text class="errt mono" x="680" y="677" text-anchor="start">QuotaPilotTimeoutError</text>
+<text class="s" x="680" y="693" text-anchor="start">attempt abandoned — whether it completed is unknown</text>
+
+<rect class="err" x="660" y="748" width="400" height="46" rx="8"/>
+<text class="errt" x="680" y="769" text-anchor="start">your error, unchanged</text>
+<text class="s" x="680" y="785" text-anchor="start">no policy, classifier said stop, or attempts exhausted</text>
+
+<path class="a" d="M430,62 L430,82"/>
+<path class="a" d="M430,132 L430,152"/>
+<text class="lbl" x="438" y="147" text-anchor="start">yes</text>
+<path class="ae" d="M600,109 L656,109"/>
+<text class="lbl" x="628" y="103" text-anchor="middle">no</text>
+
+<path class="a" d="M430,202 L430,222"/>
+<path class="ae" d="M600,179 L656,179"/>
+
+<path class="a" d="M430,272 L430,292"/>
+<text class="lbl" x="438" y="288" text-anchor="start">'wait' (default)</text>
+
+<path class="a" d="M600,249 L632,249 L632,505 L602,505"/>
+<text class="lbl" x="636" y="243" text-anchor="start">'reject'</text>
+
+<path class="ae" d="M600,325 L656,325"/>
+<path class="a" d="M430,354 L430,384"/>
+<path class="ae" d="M600,411 L656,411"/>
+<text class="lbl" x="628" y="405" text-anchor="middle">expired</text>
+
+<path class="a" d="M430,434 L430,482"/>
+
+<path class="ao" d="M430,572 L430,582"/>
+<text class="lbl" x="438" y="581" text-anchor="start">all three permit</text>
+
+<path class="a" d="M262,520 L224,520"/>
+<path class="ae" d="M598,556 L656,556"/>
+
+<path class="a" d="M130,486 L130,411 L256,411"/>
+<text class="lbl" x="138" y="404" text-anchor="start">woken</text>
+
+<path class="ao" d="M430,628 L430,652"/>
+
+<path class="ao" d="M260,685 L224,685"/>
+<path class="ae" d="M600,679 L656,679"/>
+<text class="lbl" x="628" y="673" text-anchor="middle">timed out</text>
+
+<path class="a" d="M430,714 L430,744"/>
+<text class="lbl" x="438" y="737" text-anchor="start">threw or rejected</text>
+
+<path class="ae" d="M600,771 L656,771"/>
+<text class="lbl" x="628" y="765" text-anchor="middle">no retry</text>
+
+<path class="a" d="M430,794 L430,824"/>
+<text class="lbl" x="438" y="817" text-anchor="start">retry</text>
+
+<path class="a" d="M430,886 L430,908"/>
+
+<path class="al" d="M260,948 L22,948 L22,446 L380,446 L380,438"/>
+
+<rect class="note" x="40" y="1000" width="485" height="40" rx="8"/>
+<text class="s" x="56" y="1017" text-anchor="start">Cancellation: an AbortSignal rejects the call from any state above. Nothing is</text>
+<text class="s" x="56" y="1033" text-anchor="start">spent before an attempt starts; nothing is refunded once one has.</text>
+
+<rect class="note" x="575" y="1000" width="485" height="40" rx="8"/>
+<text class="s" x="591" y="1017" text-anchor="start">Telemetry: onDecision observes every step above —</text>
+<text class="s" x="591" y="1033" text-anchor="start">queued, delayed, admitted, retrying, completed, refused.</text>
+</svg>

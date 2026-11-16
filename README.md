@@ -25,8 +25,34 @@ assuming the usual ones.
 
 ---
 
+## How QuotaPilot Works
+
+One call, from `run()` to settled. Every box is a real code path; the three
+numbered checks happen in **one synchronous step**, which is what makes them
+all-or-nothing.
+
+![The lifecycle of one QuotaPilot call: run() validates synchronously, acquires the key's partition, then either joins that key's bounded FIFO queue or fails fast. The pump offers the head to atomic admission, which checks per-key concurrency, every weighted rate constraint and the global concurrency slot together and commits all of them or takes nothing. An admitted attempt runs with its own AbortSignal; a failure is classified by the caller, and a retry backs off and re-enters the tail of the same queue through normal admission.](https://raw.githubusercontent.com/SnirYadid/quota-pilot/main/docs/diagrams/lifecycle.svg)
+
+Three things the picture is trying to make obvious:
+
+- **Admission is atomic.** Per-key concurrency, every rate constraint and the
+  global slot are checked and debited together, with no `await` in between. A
+  blocked call takes nothing at all — no capacity, no slot.
+- **A retry is not a shortcut.** It backs off holding neither a slot nor a
+  queue entry, then re-enters the **tail** of its key's queue and passes
+  through the same admission as fresh work. It pays again.
+- **Refusals are distinguishable.** The red boxes are different error classes,
+  not one generic failure, because the right response differs for each.
+
+The editable source is [`docs/diagrams/lifecycle.mmd`](docs/diagrams/lifecycle.mmd).
+A test asserts the diagram names only error classes, options and event kinds
+that actually exist, so it cannot quietly drift from the code.
+
+---
+
 ## Contents
 
+- [How QuotaPilot Works](#how-quotapilot-works)
 - [What it does](#what-it-does)
 - [The problem it solves](#the-problem-it-solves)
 - [Why choose it](#why-choose-it)

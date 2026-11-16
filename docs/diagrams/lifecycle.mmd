@@ -1,0 +1,63 @@
+%% QuotaPilot — the lifecycle of one call.
+%%
+%% EDITABLE SOURCE for docs/diagrams/lifecycle.svg, which is what the README
+%% displays: npm does not render Mermaid, so the README needs an image.
+%%
+%% Edit this file first, then update the SVG to match. `test/diagram.spec.ts`
+%% checks that the two agree on every error class and option they name, and
+%% that those names exist in the code — so neither file can drift from the
+%% other, and neither can drift from the library.
+%%
+%% To re-render from this source (no permanent dependency):
+%%   npx -y @mermaid-js/mermaid-cli -i docs/diagrams/lifecycle.mmd -o /tmp/out.svg
+%% The committed SVG is hand-laid-out rather than generated, because Mermaid's
+%% automatic layout puts the refusal paths wherever they fit and the result is
+%% harder to read than the thing it documents. Use the render as a check on
+%% this source, not as a replacement for the committed file.
+%%
+%% Every node corresponds to real code:
+%%   options valid?      src/limiter.ts    normalizeRunOptions
+%%   acquire partition   src/partition.ts  createPartitionRegistry.acquire
+%%   FIFO queue          src/queue.ts      BoundedFifo
+%%   pump                src/scheduler.ts  pump
+%%   atomic admission    src/admit.ts      tryAdmit  (contains no await)
+%%   fn(AttemptContext)  src/call.ts       start
+%%   classify / backoff  src/call.ts       decide, scheduleRetry
+flowchart TD
+    RUN["limiter.run(fn, options)"] --> VALID{"options valid?"}
+    VALID -- no --> CONFIG["QuotaPilotConfigError<br/>thrown synchronously, before any promise exists"]
+    VALID -- yes --> KEY["acquire this key's partition"]
+    KEY --> KEYLIMIT["QuotaPilotKeyLimitError<br/>maxKeys reached and nothing is safe to evict"]
+    KEY --> MODE{"onSaturated?"}
+
+    MODE -- "'reject'" --> ADMIT
+    MODE -- "'wait' (default)" --> QUEUE["per-key FIFO queue<br/>bounded by maxQueueDepth"]
+    QUEUE --> QUEUEFULL["QuotaPilotQueueFullError<br/>this key already has maxQueueDepth waiting"]
+    QUEUE --> PUMP["pump — this key's head<br/>strict FIFO; keys never block each other"]
+    PUMP -- expired --> BUDGET["QuotaPilotBudgetError<br/>the wait, or the next backoff, passes totalBudgetMs"]
+    PUMP --> ADMIT
+
+    subgraph ATOMIC["ATOMIC ADMISSION — ONE SYNCHRONOUS STEP, NO await"]
+        ADMIT["1. per-key concurrency<br/>2. every rate constraint, weighted by cost<br/>3. global concurrency slot"]
+        ADMIT -- "all three permit" --> COMMIT["debit every bucket, hold the slot"]
+    end
+
+    ADMIT --> WAIT["blocked — it waits<br/>for exactly one wake:<br/>a rate timer, a freed slot,<br/>or this key's own completion"]
+    WAIT -- woken --> PUMP
+    ADMIT --> SATURATED["QuotaPilotSaturatedError<br/>only under onSaturated: 'reject'. kind names what blocked:<br/>rate, concurrency, key-concurrency, queued-ahead"]
+
+    COMMIT --> ATTEMPT["fn(AttemptContext)<br/>its own AbortSignal + attemptTimeoutMs"]
+    ATTEMPT --> RESOLVED["call resolves"]
+    ATTEMPT -- "timed out" --> TIMEOUT["QuotaPilotTimeoutError<br/>attempt abandoned — whether it completed is unknown"]
+    ATTEMPT -- "threw or rejected" --> CLASSIFY{"classify(error, context)<br/>yours — QuotaPilot ships no default"}
+
+    CLASSIFY -- "no retry" --> YOURS["your error, unchanged<br/>no policy, classifier said stop, or attempts exhausted"]
+    CLASSIFY -- retry --> BACKOFF["backoff with full jitter<br/>a provider's Retry-After is used verbatim"]
+    BACKOFF --> REQUEUE["re-enters the queue TAIL<br/>while sleeping: no slot, no queue entry<br/>then back through normal admission — a retry pays again"]
+    REQUEUE --> PUMP
+
+    CANCEL["Cancellation: an AbortSignal rejects the call from any state above.
+    Nothing is spent before an attempt starts; nothing is refunded once one has."]
+
+    TELEMETRY["Telemetry: onDecision observes every step above —
+    queued, delayed, admitted, retrying, completed, refused."]
