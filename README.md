@@ -6,16 +6,16 @@ concurrency control, classified retries, honest guarantees, deterministic
 tests, zero runtime dependencies.
 
 ```bash
-npm install outbound-rate-limiter           # resolves 0.1.0-alpha.6
+npm install outbound-rate-limiter           # resolves 0.1.0-alpha.7
 npm install outbound-rate-limiter@alpha     # the same build, asked for explicitly
-npm install outbound-rate-limiter@0.1.0-alpha.6   # pinned
+npm install outbound-rate-limiter@0.1.0-alpha.7   # pinned
 ```
 
 > [!IMPORTANT]
 > **There is no stable release yet. The default install gives you an alpha.**
-> Both the `latest` and `alpha` dist-tags point at `0.1.0-alpha.6`, so a plain
-> `npm install` resolves a prerelease — not the production-ready version that
-> `latest` usually implies.
+> Both the `latest` and `alpha` dist-tags point at the current alpha, so a
+> plain `npm install` resolves a prerelease — not the production-ready version
+> that `latest` usually implies.
 >
 > It is an alpha for a specific reason, not as a formality: the API has not yet
 > been used by anyone outside its own test suite. Expect the shape of the
@@ -29,7 +29,7 @@ npm install outbound-rate-limiter@0.1.0-alpha.6   # pinned
 > way and the limiter will warn you if you try. Read
 > [Single-process scope](#single-process-scope) before adopting it.
 
-**Status: `0.1.0-alpha.6`, published on npm with verified provenance.** The
+**Status: `0.1.0-alpha.7`, published on npm with verified provenance.** The
 release is built and published by GitHub Actions over OIDC, so npm carries a
 signed attestation tying the published tarball to the workflow run and the
 commit it was built from. `npm audit signatures` reports a verified registry
@@ -335,8 +335,8 @@ const perCredential = createLimiter({      // the per-credential ceiling
 });
 
 await perCredential.run(
-  () => account.run(() => callProvider(credential), {retry}),
-  {key: credential}
+  () => account.run(({signal}) => callProvider(credential, signal), {signal}),
+  {key: credential, signal, retry}
 );
 ```
 
@@ -354,6 +354,11 @@ Three things decide whether this is correct:
 - **Queue depth.** Each limiter has its own `maxQueueDepth`, per key. A call
   blocked in the inner limiter still occupies an outer slot, so size the outer
   queue for your real fan-in, not for one credential.
+- **Cancellation does not cross the boundary.** A `signal` on the outer `run`
+  cancels the outer call only; the inner one never hears about it. Measured:
+  the outer rejects `AbortError` while the inner runs to completion and the
+  account limiter still reports `inflight: 1`. Pass `signal` to **both** runs
+  and thread it into the work, and the inner stops with it.
 
 ([`examples/09-global-and-per-key.ts`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples/09-global-and-per-key.ts))
 

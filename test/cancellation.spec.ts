@@ -768,3 +768,105 @@ describe('cancellation — a pre-aborted signal without a reason', () => {
     expect(limiter.stats().keys).toBe(0);
   });
 });
+
+describe('cancellation across nested limiters', () => {
+  /**
+   * Two limiters nested — the documented way to hold an account-wide ceiling
+   * and a per-credential one at the same time (README, "A global limit *and*
+   * a per-key limit").
+   *
+   * The trap: an `AbortSignal` on the outer `run` cancels the outer call and
+   * nothing else. The inner limiter never learns about it, so it keeps holding
+   * a concurrency slot for work that the caller has already been told was
+   * cancelled. These tests pin BOTH arrangements, including the wrong one,
+   * because the wrong one is what a reader will write first.
+   */
+
+  const plenty: RateConstraint[] = [{name: 'plenty', limit: 10_000, interval: 'second'}];
+
+  it('does NOT reach the inner limiter when only the outer run is given the signal', async () => {
+    const clock = createVirtualClock(0);
+    const account = createLimiter({constraints: plenty, clock});
+    const perCredential = createLimiter({constraints: plenty, clock});
+
+    const controller = new AbortController();
+    const gate = deferred<string>();
+    let innerSettled = false;
+
+    const call = ignore(
+      perCredential.run(
+        () =>
+          account.run(async () => {
+            const value = await gate.promise;
+            innerSettled = true;
+            return value;
+          }),
+        {key: 'cred-1', signal: controller.signal}
+      )
+    );
+
+    await clock.flush();
+    controller.abort();
+    await clock.flush();
+
+    // The caller has been answered...
+    await expect(
+      perCredential.run(() => 'probe', {key: 'other'})
+    ).resolves.toBe('probe');
+    // ...but the inner limiter is still holding a slot for live work.
+    expect(account.stats().inflight).toBe(1);
+    expect(innerSettled).toBe(false);
+
+    gate.resolve('late');
+    await settleAll(clock, [call]);
+    expect(innerSettled).toBe(true);
+    expect(account.stats().inflight).toBe(0);
+  });
+
+  it('stops the inner call when the signal is passed to both runs', async () => {
+    const clock = createVirtualClock(0);
+    const account = createLimiter({constraints: plenty, clock});
+    const perCredential = createLimiter({constraints: plenty, clock});
+
+    const controller = new AbortController();
+    const gate = deferred<string>();
+    let innerFinishedNormally = false;
+
+    const call = ignore(
+      perCredential.run(
+        () =>
+          account.run(
+            async ({signal}) => {
+              // Races the gate against the abort. If the abort wins — which is
+              // the whole point — the gate branch never runs.
+              const value = await Promise.race([
+                gate.promise,
+                new Promise<never>((_resolve, reject) => {
+                  signal.addEventListener('abort', () => {
+                    reject(signal.reason as Error);
+                  });
+                }),
+              ]);
+              innerFinishedNormally = true;
+              return value;
+            },
+            {signal: controller.signal}
+          ),
+        {key: 'cred-1', signal: controller.signal}
+      )
+    );
+
+    await clock.flush();
+    controller.abort();
+    await settleAll(clock, [call]);
+
+    // The gate is still open, so a normal completion was genuinely possible —
+    // the abort is what stopped it.
+    gate.resolve('would have completed');
+    await clock.flush();
+    expect(innerFinishedNormally).toBe(false);
+    // Both limiters are clean: the inner one released its slot with the abort.
+    expect(account.stats()).toMatchObject({queued: 0, inflight: 0, backingOff: 0});
+    expect(perCredential.stats()).toMatchObject({queued: 0, inflight: 0, backingOff: 0});
+  });
+});

@@ -66,6 +66,30 @@ export async function main(): Promise<{
 }
 
 /**
+ * CANCELLATION DOES NOT CROSS THE BOUNDARY BY ITSELF.
+ *
+ * An `AbortSignal` on the outer `run` cancels the outer call and nothing else.
+ * The inner call has never heard of it. Measured, aborting mid-flight:
+ *
+ *   signal on the outer run only
+ *     outer rejects AbortError · inner runs to completion ·
+ *     account limiter still reports inflight: 1 afterwards        ✗
+ *
+ *   signal passed to BOTH runs, and threaded into the work
+ *     outer rejects AbortError · inner never completes ·
+ *     account limiter reports inflight: 0 immediately             ✓
+ *
+ * So pass `signal` to both, exactly as you would thread it into `fetch`:
+ *
+ *   perCredential.run(
+ *     () => account.run(({signal}) => callProvider(signal), {signal}),
+ *     {key: credential, signal}
+ *   );
+ *
+ * Without it the caller is told the work was cancelled while it is still in
+ * flight, and the account limiter holds a concurrency slot until it settles.
+ * Capacity already spent is never refunded either way — the request was sent.
+ *
  * WHERE TO PUT THE RETRY POLICY, and why it is not the obvious choice.
  *
  * A retry is a real outbound request. Both ceilings should charge for it, and

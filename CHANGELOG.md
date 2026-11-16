@@ -462,7 +462,7 @@ same behaviour; this version exists to exercise the release path.
   343-byte stub containing no code, which is a confusing thing to discover on
   your own.
 
-## Unreleased
+## 0.1.0-alpha.7 — unreleased
 
 Documentation and packaging, from an independent consumer audit: a standalone
 app installed `0.1.0-alpha.6` from the registry and ran it against a mock
@@ -521,6 +521,21 @@ correct *first* configuration, plus two packaging defects.
   every consumer has to write — and the audit found it was not installed.
   The files are TypeScript source, which is what their header already asks for:
   copy them, do not import them.
+
+### Cancellation across nested limiters
+
+Found while re-verifying the nested pattern for this release, not during the
+original audit. An `AbortSignal` on the outer `run` cancels the outer call and
+nothing else — the inner call never hears about it. Measured mid-flight:
+
+- signal on the outer run only: the outer rejects `AbortError`, the inner runs
+  to completion, and the account limiter still reports `inflight: 1`
+- signal passed to both runs and threaded into the work: the inner stops and
+  the account limiter reports `inflight: 0` immediately
+
+The caller is otherwise told the work was cancelled while it is still in
+flight. Documented in the example and the README, and pinned by a test that
+asserts the *wrong* arrangement's behaviour so it cannot change unnoticed.
 
 ### Deliberately not changed
 
