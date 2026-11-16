@@ -16,10 +16,10 @@ Nothing in this list is automated, because all of it happens outside the repo.
 
 - [x] Create the repository. **Public** — npm provenance attestations require a
       public repository and a public package.
-      → `github.com/SnirYadid/quota-pilot`
+      → `github.com/SnirYadid/outbound-rate-limiter`
 - [x] Owner and name decided. The repository name matches the package name, so
       the npm page, the badge URLs and the provenance link all agree.
-- [x] `git remote add origin https://github.com/SnirYadid/quota-pilot.git`
+- [x] `git remote add origin https://github.com/SnirYadid/outbound-rate-limiter.git`
 - [x] Placeholder replaced in `package.json` (`repository`, `homepage`,
       `bugs`). `npm run preflight` fails while any placeholder remains, and the
       release workflow runs it.

@@ -25,11 +25,11 @@
   "author": "Snir Yadid",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SnirYadid/quota-pilot.git"
+    "url": "git+https://github.com/SnirYadid/outbound-rate-limiter.git"
   },
-  "homepage": "https://github.com/SnirYadid/quota-pilot#readme",
+  "homepage": "https://github.com/SnirYadid/outbound-rate-limiter#readme",
   "bugs": {
-    "url": "https://github.com/SnirYadid/quota-pilot/issues"
+    "url": "https://github.com/SnirYadid/outbound-rate-limiter/issues"
   },
   "type": "module",
   "engines": {

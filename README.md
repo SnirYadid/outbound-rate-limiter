@@ -33,7 +33,7 @@ One call, from `run()` to settled. Every box is a real code path; the three
 numbered checks happen in **one synchronous step**, which is what makes them
 all-or-nothing.
 
-![The lifecycle of one call: run() validates synchronously, acquires the key's partition, then either joins that key's bounded FIFO queue or fails fast. The pump offers the head to atomic admission, which checks per-key concurrency, every weighted rate constraint and the global concurrency slot together and commits all of them or takes nothing. An admitted attempt runs with its own AbortSignal; a failure is classified by the caller, and a retry backs off and re-enters the tail of the same queue through normal admission.](https://raw.githubusercontent.com/SnirYadid/quota-pilot/main/docs/diagrams/lifecycle.svg)
+![The lifecycle of one call: run() validates synchronously, acquires the key's partition, then either joins that key's bounded FIFO queue or fails fast. The pump offers the head to atomic admission, which checks per-key concurrency, every weighted rate constraint and the global concurrency slot together and commits all of them or takes nothing. An admitted attempt runs with its own AbortSignal; a failure is classified by the caller, and a retry backs off and re-enters the tail of the same queue through normal admission.](https://raw.githubusercontent.com/SnirYadid/outbound-rate-limiter/main/docs/diagrams/lifecycle.svg)
 
 Three things the picture is trying to make obvious:
 

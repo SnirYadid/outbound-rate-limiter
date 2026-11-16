@@ -410,6 +410,10 @@ Inheritance, fields and behaviour are unchanged. `LimiterAbortError.name` is
 still `'AbortError'` — that deviation from the class name is a deliberate
 `fetch`/`DOMException` interop contract, not an oversight.
 
-The GitHub repository stays at `SnirYadid/quota-pilot` until staging proves the
-new package name is accepted, so `repository`, `homepage`, `bugs` and the
-README's absolute diagram URL still point there and still resolve.
+The GitHub repository was held at `SnirYadid/quota-pilot` until npm staging
+proved the new package name was accepted. It did, so the repository is now
+`SnirYadid/outbound-rate-limiter` and `repository`, `homepage`, `bugs` and the
+README's diagram URL point there. GitHub keeps serving the old paths — web URLs
+redirect, and `raw.githubusercontent.com` serves the old path directly — so the
+already-staged `0.1.0-alpha.5` tarball, which has the old URLs baked in, is
+unaffected.

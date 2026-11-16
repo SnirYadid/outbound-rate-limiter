@@ -143,7 +143,7 @@ describe('the README embeds the diagram', () => {
     // half the people who see it.
     const image = /!\[[^\]]*\]\((https:\/\/[^)]+lifecycle\.svg)\)/.exec(readme);
     expect(image, 'the README must embed the SVG by absolute https URL').not.toBeNull();
-    expect(image?.[1]).toContain('raw.githubusercontent.com/SnirYadid/quota-pilot');
+    expect(image?.[1]).toContain('raw.githubusercontent.com/SnirYadid/outbound-rate-limiter');
   });
 
   it('links the editable Mermaid source next to it', () => {
