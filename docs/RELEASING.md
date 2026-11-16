@@ -23,9 +23,9 @@ Nothing in this list is automated, because all of it happens outside the repo.
 - [x] Placeholder replaced in `package.json` (`repository`, `homepage`,
       `bugs`). `npm run preflight` fails while any placeholder remains, and the
       release workflow runs it.
-- [ ] Push `main`. Confirm the CI workflow runs green on Node 22, 24 and 26.
-- [ ] Repository description and topics: `rate-limiting`, `token-bucket`,
-      `retry`, `backoff`, `concurrency`, `typescript`, `nodejs`.
+- [x] Push `main`. Confirm the CI workflow runs green on Node 22, 24 and 26.
+      → run 43821400614, all three matrix jobs green at `3b8beae`.
+- [x] Repository description and topics set.
 - [ ] Settings → Actions → General → Workflow permissions: **read repository
       contents**. Both workflows declare their own permissions, so the default
       only needs to be no wider than that.
@@ -50,54 +50,79 @@ Nothing in this list is automated, because all of it happens outside the repo.
 
 **A trusted publisher cannot be configured for a package that does not exist.**
 The configuration lives in that package's settings page on npmjs.com, so the
-very first publication cannot use OIDC. There is no way around this; the only
-choice is what the first artifact is.
+very first submission cannot use OIDC and must carry an ordinary credential.
+That part is unavoidable. What *is* avoidable is publishing something junk to
+get there.
 
-Two orders, with a real trade-off.
+**Prerequisite:** local npm **11.15.0 or later** on Node **22.14.0 or later**.
+The npm bundled with Node is older than that, so `npm install -g npm@latest`
+first and confirm with `npm --version`.
 
-### Option A — publish the real alpha manually, then wire OIDC
-
-```bash
-npm run verify          # lint, typecheck, tests, build, consumer smoke
-npm run preflight       # add --registry to also check the registry
-npm publish             # publishConfig pins --tag alpha and public access
-```
-
-- Simplest, and nothing junk ends up on the registry.
-- **The first tarball carries no provenance attestation**, because provenance
-  requires OIDC.
-- Watch the expiry trap: after configuring the trusted publisher, the config
-  needs a successful publish within 2 days. With this option the real alpha is
-  already out, so there may be nothing to publish inside that window and the
-  config silently expires. Either configure it immediately before the next
-  real release, or accept reconfiguring it later.
-
-### Option B — bootstrap with a throwaway version, then release over OIDC
+### Step 3.1 — stage the real version, do not approve it
 
 ```bash
-npm version 0.0.1-bootstrap --no-git-tag-version
-npm publish --tag bootstrap     # creates the package so settings exist
-git checkout package.json       # discard the version bump
+npm run verify            # lint, typecheck, tests, build, consumer smoke
+node scripts/preflight.mjs --registry
+npm stage publish         # publishConfig pins --tag alpha and public access
 ```
 
-Then configure the trusted publisher (step 4) and release `0.1.0-alpha.5`
-through the workflow within 2 days.
+Staging a package that has never been published creates the package on the
+registry with a placeholder version `0.0.0-stage`. The placeholder is publicly
+visible; **the staged contents are not installable until approved.** So after
+this step the package exists — which is the precondition the trusted publisher
+needs — without anything installable having been released.
 
-- The real alpha gets a provenance attestation, and that first OIDC release is
-  what validates the configuration — the expiry window is used rather than
-  raced.
-- Costs a permanent junk version on the registry. It can be deprecated
-  (`npm deprecate quota-pilot@0.0.1-bootstrap "bootstrap placeholder"`) but not
-  removed.
+### Step 3.2 — check whether the settings page is now available
 
-**Recommendation: Option B.** The whole argument for this library is that its
-claims are checkable, and provenance on the first real artifact is exactly
-that. One deprecated placeholder version is a cheap price.
+Open npmjs.com → `quota-pilot` → **Settings**. Either the Trusted Publisher
+section is there or it is not.
 
-> `npm stage publish` also works for an unpublished package, but it creates a
-> publicly visible `0.0.0-stage` placeholder version, so it is not a way to
-> avoid Option B's cost. Whether that placeholder is enough to unlock the
-> settings page has not been verified — do not plan around it.
+npm's documentation states that staging creates the package, but does **not**
+say whether a staged-only package exposes its settings page. That is the one
+unknown in this sequence. Checking costs nothing and changes nothing, which is
+why the sequence is ordered to find out before anything is irreversible.
+
+**If Trusted Publisher is available** — configure it (step 4), then:
+
+```bash
+npm stage list
+npm stage reject <stage-id>    # discard the locally built artifact
+```
+
+and dispatch the Release workflow with `mode: publish`. The real
+`0.1.0-alpha.5` is then published from CI, carrying a provenance attestation,
+and that publish is what validates the new configuration inside its 2-day
+window. Cost: one public `0.0.0-stage` placeholder, nothing installable that
+should not be.
+
+**If Trusted Publisher is not available** — approve what you staged:
+
+```bash
+npm stage download <stage-id>  # inspect the exact tarball first
+npm stage approve <stage-id>   # 2FA
+```
+
+`0.1.0-alpha.5` goes live without a provenance attestation. Configure the
+trusted publisher afterwards and use OIDC from `0.1.0-alpha.6` onward, timing
+the configuration so a real release falls inside the 2-day window.
+
+### Why not a throwaway bootstrap version
+
+An earlier draft of this runbook recommended publishing `0.0.1-bootstrap` to
+create the package, then releasing the real alpha over OIDC. Staging is
+strictly better: it creates the same package entry without putting an
+installable version on the registry that has to be deprecated and then lives
+there forever. The `0.0.0-stage` placeholder is a marker, not a release — no
+one can install it.
+
+### Why the first OIDC release uses `mode: publish`, not `mode: stage`
+
+Configurations created after 3 September 2026 permit `npm stage publish` by
+default, with direct `npm publish` as an opt-in. A direct publish is
+unambiguously "a successful publish" for the purpose of validating a new
+configuration; whether a *staged* submission also counts is not documented.
+Enable the direct-publish option, use it once to validate, and switch to
+`mode: stage` for every release after that.
 
 ## 4. Configure the npm trusted publisher
 
