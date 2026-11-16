@@ -34,7 +34,18 @@ try {
   log(`packed:    ${tarball}`);
 
   const contents = run('npm', ['pack', '--dry-run', '--json'], root);
-  const [manifest] = JSON.parse(contents);
+  // npm 12 changed this payload from an array of manifests to an object keyed
+  // by package name. Both shapes are accepted because this script has to run
+  // on whatever npm the developer or the CI runner happens to have, and a
+  // packaging check that only works on one npm major is not a check.
+  const parsed = JSON.parse(contents);
+  const manifest = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
+  if (manifest?.files === undefined) {
+    throw new Error(
+      `npm pack --json returned an unrecognised shape (npm ${run('npm', ['--version'], root).trim()}): ` +
+        `${Object.keys(parsed).join(', ')}`
+    );
+  }
   const shipped = manifest.files.map((f) => f.path).sort();
   log(`files:     ${shipped.length} entries`);
 
