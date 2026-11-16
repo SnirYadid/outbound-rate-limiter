@@ -67,7 +67,15 @@ jobs:
           # matrix covers, so the publish runs on a version already proven
           # green rather than on whatever the runner defaults to.
           node-version: '26'
-          cache: npm
+          # Caching is off for the release job, deliberately. CI keeps it on —
+          # it runs on every push and the speed is worth it — but a release
+          # should install from the registry exactly as a fresh machine would,
+          # so a stale or poisoned cache entry cannot end up inside a published
+          # artifact. This runs once, by hand; the minute it costs is cheap.
+          #
+          # `package-manager-cache: false` rather than omitting `cache:`,
+          # because setup-node caches automatically unless told not to.
+          package-manager-cache: false
           # `registry-url` is deliberately NOT set.
           #
           # It writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
