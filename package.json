@@ -50,7 +50,8 @@
         "types": "./dist/cjs/index.d.ts",
         "default": "./dist/cjs/index.js"
       }
-    }
+    },
+    "./package.json": "./package.json"
   },
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
@@ -58,6 +59,7 @@
   "files": [
     "dist",
     "src",
+    "examples",
     "docs/ARCHITECTURE.md",
     "docs/DECISIONS.md",
     "docs/GUARANTEES.md",

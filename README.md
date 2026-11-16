@@ -20,7 +20,7 @@ npm install outbound-rate-limiter@0.1.0-alpha.6   # pinned
 > It is an alpha for a specific reason, not as a formality: the API has not yet
 > been used by anyone outside its own test suite. Expect the shape of the
 > options to change before `0.1.0`. **Pin an exact version** if you depend on
-> it, and read [the guarantees](docs/GUARANTEES.md) rather than assuming the
+> it, and read [the guarantees](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/docs/GUARANTEES.md) rather than assuming the
 > usual ones.
 
 > **This library bounds outbound traffic from one Node process.**
@@ -59,7 +59,7 @@ Three things the picture is trying to make obvious:
 - **Refusals are distinguishable.** The red boxes are different error classes,
   not one generic failure, because the right response differs for each.
 
-The editable source is [`docs/diagrams/lifecycle.mmd`](docs/diagrams/lifecycle.mmd).
+The editable source is [`docs/diagrams/lifecycle.mmd`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/docs/diagrams/lifecycle.mmd).
 A test asserts the diagram names only error classes, options and event kinds
 that actually exist, so it cannot quietly drift from the code.
 
@@ -76,6 +76,8 @@ that actually exist, so it cannot quietly drift from the code.
 - [Declaring constraints](#declaring-constraints)
 - [Several limits at once](#several-limits-at-once)
 - [Keyed limiting](#keyed-limiting)
+- [A global limit *and* a per-key limit](#a-global-limit-and-a-per-key-limit)
+- [Burst, and why a correct-looking config still gets 429s](#burst-and-why-a-correct-looking-config-still-gets-429s)
 - [Weighted costs](#weighted-costs)
 - [Failing fast instead of waiting](#failing-fast-instead-of-waiting)
 - [Retries](#retries)
@@ -111,7 +113,7 @@ It holds:
 
 It does not wrap `fetch`, does not ship provider presets, and does not guess
 which errors are retryable. Those are refusals, not gaps — see
-[docs/DECISIONS.md](docs/DECISIONS.md).
+[docs/DECISIONS.md](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/docs/DECISIONS.md).
 
 ## The problem it solves
 
@@ -142,7 +144,7 @@ deliberately refuses to guess at 4.
 
 ## Why choose it
 
-Most rate limiters do one of these things. the library's case for existing is
+Most rate limiters do one of these things. This library's case for existing is
 that the hard part is doing them **together**, under one admission step, with
 the interactions written down.
 
@@ -206,8 +208,29 @@ const results = await Promise.all(
 ```
 
 Every example in this README is a file under
-[`examples/`](examples/), executed by `test/examples.spec.ts` with its
-documented result asserted. They are not illustrations; they run in CI.
+[`examples/`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples), executed by `test/examples.spec.ts` with its
+documented result asserted. They are not illustrations; they run in CI. They
+also ship inside the npm package, so `classifiers.ts` is on disk after you
+install.
+
+### Five things to get right
+
+In rough order of how often they bite people:
+
+1. **This limits what you send, not what you receive.** If you want to protect
+   your own HTTP endpoints, you want Express/Fastify middleware instead.
+2. **[Keys multiply your rate.](#a-global-limit-and-a-per-key-limit)** Three
+   keys at `limit: 5` send up to 15/second, not 5. Nest two limiters if the
+   provider's ceiling is account-wide.
+3. **[`burst` defaults to `limit`.](#burst-and-why-a-correct-looking-config-still-gets-429s)**
+   Against a provider that counts a rolling window, that alone can earn you
+   429s. Set `burst: 1` for those.
+4. **[You write the classifier.](#retries)** There is no built-in 429 handling,
+   deliberately — `429` means different things at different providers. Copy
+   [`examples/classifiers.ts`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples/classifiers.ts), which parses
+   `Retry-After` in both legal forms, and adjust it.
+5. **[One process only.](#single-process-scope)** N instances means N times
+   your configured ceiling. There is no shared store.
 
 ## Declaring constraints
 
@@ -236,7 +259,7 @@ field. Constraints that cannot be enforced in memory — an hour or longer —
 are accepted but produce a `limiter.warnings` entry rather than silently
 pretending.
 
-[docs/GUARANTEES.md](docs/GUARANTEES.md#provider-wording-mapped) maps common
+[docs/GUARANTEES.md](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/docs/GUARANTEES.md#provider-wording-mapped) maps common
 provider wording onto these fields, including the two cases where the answer is
 "do not use the limiter for this".
 
@@ -259,7 +282,7 @@ const limiter = createLimiter({
 
 Six calls against that pair: the sixth waits, and `binding` is `'burst'` —
 `sustained` still has 94 of its 100 left.
-([`examples/02-multiple-limits.ts`](examples/02-multiple-limits.ts))
+([`examples/02-multiple-limits.ts`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples/02-multiple-limits.ts))
 
 ## Keyed limiting
 
@@ -283,7 +306,87 @@ and recreating it full would hand out free capacity.
 `maxKeys` (default 10,000) is enforced by **refusing a new key**, never by
 discarding a partially drained one. If you are hitting it, the key is probably
 too fine-grained — derived from a request id rather than from a credential.
-([`examples/03-keyed.ts`](examples/03-keyed.ts))
+([`examples/03-keyed.ts`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples/03-keyed.ts))
+
+## A global limit *and* a per-key limit
+
+**Every constraint you declare is partitioned by `key`.** One limiter with
+`limit: 5` and three keys does not send 5 requests per second — it sends up to
+15, because each key holds its own bucket.
+
+That is what makes keys useful, and it is the opposite of what you want when
+the provider's ceiling is account-wide. Measured, 15 calls at `limit: 5,
+burst: 1`:
+
+| keys | elapsed | actual outbound rate |
+|---|---|---|
+| one shared key | 2.83s | 5.3 req/s — matches the config |
+| three keys | 0.82s | **18.4 req/s** — three buckets, three times the rate |
+
+**A single limiter cannot express both ceilings.** There is no "global"
+constraint; the key partitions all of them. Use two limiters, nested:
+
+```ts
+const account = createLimiter({            // the account-wide ceiling
+  constraints: [{name: 'account', limit: 6, interval: 'second', burst: 1}],
+});
+const perCredential = createLimiter({      // the per-credential ceiling
+  constraints: [{name: 'credential', limit: 3, interval: 'second', burst: 1}],
+});
+
+await perCredential.run(
+  () => account.run(() => callProvider(credential), {retry}),
+  {key: credential}
+);
+```
+
+Three things decide whether this is correct:
+
+- **Order.** The keyed limiter goes on the outside. Reverse them and a call
+  waiting on its credential's capacity sits in the shared account queue, where
+  one busy credential can stall every other.
+- **Where the retry policy goes.** On the **outer** limiter. Its retry re-runs
+  the whole inner call, so the attempt passes through both buckets. Measured
+  with a task failing three times: retry on the outer gives 3 physical
+  attempts, 3 per-credential admissions and 3 account admissions; retry on the
+  inner gives 3, **1** and 3 — the per-credential ceiling silently undercounts
+  every retry.
+- **Queue depth.** Each limiter has its own `maxQueueDepth`, per key. A call
+  blocked in the inner limiter still occupies an outer slot, so size the outer
+  queue for your real fan-in, not for one credential.
+
+([`examples/09-global-and-per-key.ts`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples/09-global-and-per-key.ts))
+
+## Burst, and why a correct-looking config still gets 429s
+
+`burst` defaults to `limit`, so a bucket declared `limit: 5, interval:
+'second'` starts **full**. Five calls leave instantly, then refill adds five
+more across the next second — up to ten inside one second. That is
+[G5](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/docs/GUARANTEES.md):
+at most `limit + burst` per interval.
+
+If the provider counts *"at most 5 in any rolling second"*, you have just sent
+nearly double. Measured against a server enforcing 6 per rolling second, with
+20 calls submitted at once:
+
+| config | first second | HTTP 429s |
+|---|---|---|
+| `limit: 5` (burst defaults to 5) | 9 calls | **4** |
+| `limit: 5, burst: 1` | 5 calls | **0** |
+
+The default is not a mistake — bursting is what you want when the provider
+tolerates it, and a bounded burst is strictly better than a fixed window. It is
+simply the wrong default for a strict provider, and the symptom is 429s from a
+limiter that appears correctly configured.
+
+| the provider says | set |
+|---|---|
+| bursts are fine | leave `burst` alone |
+| "at most N in any rolling T" | `burst: 1` |
+| strict, and your calls are weighted | `burst: max(cost)` — the floor, since a cost above capacity can never be admitted |
+| "N credits, refills at r/second" | `burst: N`, `limit: r` — this is the model the bucket *is* |
+
+([`examples/10-strict-rolling-window.ts`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples/10-strict-rolling-window.ts))
 
 ## Weighted costs
 
@@ -304,7 +407,7 @@ began. A request that was sent was paid for.
 
 A cost above a constraint's `burst` could never be admitted, so it throws
 `LimiterConfigError` immediately rather than waiting forever.
-([`examples/04-weighted-cost.ts`](examples/04-weighted-cost.ts))
+([`examples/04-weighted-cost.ts`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples/04-weighted-cost.ts))
 
 ## Failing fast instead of waiting
 
@@ -354,7 +457,7 @@ await limiter.run(() => fetchPage(url), {
 });
 ```
 
-[`examples/classifiers.ts`](examples/classifiers.ts) is a reference classifier
+[`examples/classifiers.ts`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples/classifiers.ts) is a reference classifier
 and `Retry-After` parser to **copy and own**, not to import. It handles both
 header forms and the trap in the second one.
 
@@ -386,7 +489,7 @@ The rule: if the limiter stopped for a reason of its own it throws its own error
 if it ran out of the attempts you configured, or your classifier said stop, your
 error surfaces unchanged. So `catch (e) { if (e instanceof LimiterError) }`
 reads as "the limiter refused", never "the request failed".
-([`examples/05-retries.ts`](examples/05-retries.ts))
+([`examples/05-retries.ts`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples/05-retries.ts))
 
 ## Cancellation and time budgets
 
@@ -414,7 +517,7 @@ call.
 - A queued call reaches its own deadline without waiting for admission.
 - Each logical call settles exactly once, however abort, timeout, retry and
   completion interleave.
-  ([`examples/06-cancellation-and-budgets.ts`](examples/06-cancellation-and-budgets.ts))
+  ([`examples/06-cancellation-and-budgets.ts`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples/06-cancellation-and-budgets.ts))
 
 ## Telemetry
 
@@ -441,7 +544,7 @@ nothing to the console.
 `delayed` reports a **wait**, not a call: a blocked call is woken by every
 completion ahead of it and reports the same wait again if it is still blocked.
 Count calls by `queued`.
-([`examples/07-telemetry.ts`](examples/07-telemetry.ts))
+([`examples/07-telemetry.ts`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples/07-telemetry.ts))
 
 ## `drain()`
 
@@ -462,7 +565,7 @@ It inherits the liveness of your tasks. A task that never settles, with no
 `attemptTimeoutMs` and no signal, holds a drain open forever — correctly, since
 the work genuinely has not finished. If a drain hangs, look for an unbounded
 task before suspecting the limiter.
-([`examples/08-drain.ts`](examples/08-drain.ts))
+([`examples/08-drain.ts`](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/examples/08-drain.ts))
 
 ## `inspect()`
 
@@ -529,7 +632,7 @@ tightest per-interval bound = limit + max(cost)
 token-bucket configuration restores it. A strict `≤ limit` per rolling window
 with weighted calls needs a sliding-window log, which this release does not
 implement. Full statement, including floating-point slack and behaviour under
-clock anomalies: [docs/GUARANTEES.md](docs/GUARANTEES.md#the-rate-guarantee).
+clock anomalies: [docs/GUARANTEES.md](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/docs/GUARANTEES.md#the-rate-guarantee).
 
 ## Observable versus physical concurrency
 
@@ -583,7 +686,7 @@ If you need **acceptance** bounded rather than intake, `maxQueueDepth` is the
 wrong tool. Use `onSaturated: 'reject'` (nothing queues, so nothing
 accumulates), or `totalBudgetMs` (an accepted call cannot sit indefinitely), or
 bound your own producer. Details and the measured numbers:
-[docs/GUARANTEES.md](docs/GUARANTEES.md#what-bounds-accepted-work).
+[docs/GUARANTEES.md](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/docs/GUARANTEES.md#what-bounds-accepted-work).
 
 ---
 
@@ -612,16 +715,16 @@ files that test the platform clock and the examples themselves.
 
 **A layered module graph.** `src/` is a strict DAG of nine layers, enforced by
 ESLint; cycle freedom, layer-0 purity and the absence of one specific import are
-enforced by tests. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+enforced by tests. See [docs/ARCHITECTURE.md](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/docs/ARCHITECTURE.md).
 
 ## Documentation
 
-- [docs/GUARANTEES.md](docs/GUARANTEES.md) — the rate guarantee, weighted costs,
+- [docs/GUARANTEES.md](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/docs/GUARANTEES.md) — the rate guarantee, weighted costs,
   key eviction, queueing and fairness, cancellation, telemetry, what bounds
   accepted work, and which guarantees depend on cooperative cancellation.
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the layers, what enforces them,
+- [docs/ARCHITECTURE.md](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/docs/ARCHITECTURE.md) — the layers, what enforces them,
   and how to add a module.
-- [docs/DECISIONS.md](docs/DECISIONS.md) — every design decision that constrains
+- [docs/DECISIONS.md](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/docs/DECISIONS.md) — every design decision that constrains
   future work, with the alternatives that were rejected.
 
 ## Development
@@ -654,4 +757,4 @@ one:
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/SnirYadid/outbound-rate-limiter/blob/main/LICENSE).

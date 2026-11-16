@@ -60,7 +60,10 @@ try {
   ];
   const unexpected = shipped.filter(
     (path) =>
-      !path.startsWith('dist/') && !path.startsWith('src/') && !allowedDocs.includes(path)
+      !path.startsWith('dist/') &&
+      !path.startsWith('src/') &&
+      !path.startsWith('examples/') &&
+      !allowedDocs.includes(path)
   );
   if (unexpected.length > 0) {
     throw new Error(`unexpected files in the tarball: ${unexpected.join(', ')}`);

@@ -461,3 +461,72 @@ same behaviour; this version exists to exercise the release path.
   that `@alpha` or an exact version is required. A plain install returns a
   343-byte stub containing no code, which is a confusing thing to discover on
   your own.
+
+## Unreleased
+
+Documentation and packaging, from an independent consumer audit: a standalone
+app installed `0.1.0-alpha.6` from the registry and ran it against a mock
+provider that enforces its own rate limit. The limiter behaved correctly in
+every scenario. Everything below is a gap between correct behaviour and a
+correct *first* configuration, plus two packaging defects.
+
+### Fixed
+
+- **`exports` did not expose `./package.json`.** `require('outbound-rate-limiter/package.json')`
+  threw `ERR_PACKAGE_PATH_NOT_EXPORTED`, which breaks bundlers and any code
+  reading the version. Now exported, verified from a clean consumer through
+  both `require` and `import ... with {type: 'json'}`.
+- **Relative README links broke for npm consumers.** The README linked
+  `examples/…` and `docs/…`, which resolve to nothing when read from inside
+  `node_modules`. All links are now absolute GitHub URLs, verified by scanning
+  the README inside the packed tarball: zero relative links remain.
+
+### Documented
+
+- **A global limit *and* a per-key limit.** Every constraint is partitioned by
+  `key`, so three keys at `limit: 5` send up to 15/second, not 5. A single
+  limiter cannot express both ceilings — there is no global constraint. The
+  README now says so and shows the nested-limiter pattern, verified against a
+  server enforcing 6/second: nested gives 18 calls, 0 × 429; keyed-only gives
+  6 × 429 on the same work.
+
+  Three details decide whether nesting is correct, and all three are now
+  written down: the keyed limiter goes **outside** (otherwise one busy
+  credential stalls the shared queue); the retry policy goes on the **outer**
+  limiter; and each limiter has its own queue depth.
+
+  The retry placement is the counter-intuitive one, so it was measured rather
+  than reasoned about. With a task failing three times — retry on the outer
+  limiter charges both buckets 3 times; retry on the inner charges the
+  per-credential bucket **once**, silently undercounting every retry.
+
+- **Why a correct-looking config still gets 429s.** `burst` defaults to
+  `limit`, so a bucket starts full and can emit `limit + burst` in one
+  interval — guarantee G5, behaving as specified. Against a provider counting
+  a rolling window that is roughly double. Measured: `limit: 5` with the
+  default burst put 9 calls in the first second and earned 4 × 429;
+  `burst: 1` put 5 and earned none. Includes a table mapping provider wording
+  to the right `burst`.
+
+- **An orientation list** after the minimal example: the five things that bite
+  people, in the order they bite, each linking to the section that explains it.
+
+### Added
+
+- `examples/09-global-and-per-key.ts` and `examples/10-strict-rolling-window.ts`,
+  both executed by `test/examples.spec.ts` with asserted results, as every
+  example is.
+- `examples/` now ships in the npm package. It is the only place
+  `classifiers.ts` exists — the `Retry-After` parsing and HTTP classification
+  every consumer has to write — and the audit found it was not installed.
+  The files are TypeScript source, which is what their header already asks for:
+  copy them, do not import them.
+
+### Deliberately not changed
+
+- **The `burst` default.** Changing it would silently alter the rate of every
+  existing configuration, and the current value is correct for providers that
+  tolerate bursting. Documented instead.
+- **A runtime warning when `burst === limit`.** It would fire on every
+  correct-by-default configuration, which is how warnings get ignored. Not
+  added without evidence that it helps more than it annoys.

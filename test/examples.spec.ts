@@ -23,6 +23,8 @@ import {main as retries} from '../examples/05-retries.js';
 import {main as cancellation} from '../examples/06-cancellation-and-budgets.js';
 import {main as telemetry} from '../examples/07-telemetry.js';
 import {main as drain} from '../examples/08-drain.js';
+import {main as globalAndPerKey} from '../examples/09-global-and-per-key.js';
+import {main as strictWindow} from '../examples/10-strict-rolling-window.js';
 import {httpClassifier, parseRetryAfter} from '../examples/classifiers.js';
 
 describe('examples behave as documented', () => {
@@ -82,6 +84,34 @@ describe('examples behave as documented', () => {
 
   it('08 drain: it waits for accepted work and does not close the limiter', async () => {
     expect(await drain()).toEqual({before: ['a', 'b', 'c'], after: 'after-drain'});
+  });
+
+  it('09 global + per-key: nesting holds the account ceiling across keys', async () => {
+    const {attempts, perCredential, maxInAnySecond} = await globalAndPerKey();
+
+    expect(attempts).toBe(18);
+    // Work spread evenly across the three credentials.
+    expect(perCredential).toEqual({'cred-0': 6, 'cred-1': 6, 'cred-2': 6});
+    // The account limiter is declared 6/second with burst 1. G5 bounds any
+    // one-interval window at limit + burst = 7. Without the outer limiter the
+    // three keys would each run at 3/s, so 9 — which is the whole point.
+    expect(maxInAnySecond).toBeLessThanOrEqual(7);
+  });
+
+  it('10 strict window: burst 1 removes the clump that causes 429s', async () => {
+    const {bursty, paced, burstyFirstSecond, pacedFirstSecond} = await strictWindow();
+
+    expect(bursty).toHaveLength(8);
+    expect(paced).toHaveLength(8);
+
+    // Default burst: the first five leave together, before any refill.
+    expect(bursty.filter((t) => t < 50)).toHaveLength(5);
+    // burst 1: they are spaced, so at most one has left that early.
+    expect(paced.filter((t) => t < 50).length).toBeLessThanOrEqual(1);
+
+    // The number a provider with a rolling window actually counts.
+    expect(burstyFirstSecond).toBeGreaterThan(pacedFirstSecond);
+    expect(pacedFirstSecond).toBeLessThanOrEqual(5);
   });
 });
 
