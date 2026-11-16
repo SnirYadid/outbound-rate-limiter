@@ -14,7 +14,7 @@ import {normalizeConstraints} from '../src/constraints.js';
 import {createLimiter} from '../src/limiter.js';
 import {createPartitionRegistry} from '../src/partition.js';
 import {createSemaphore} from '../src/semaphore.js';
-import {QuotaPilotSaturatedError} from '../src/errors.js';
+import {LimiterSaturatedError} from '../src/errors.js';
 import type {RateConstraint} from '../src/types.js';
 import {createVirtualClock} from './harness/virtual-clock.js';
 import {settleAll} from './harness/settle.js';
@@ -268,9 +268,9 @@ describe('binding constraint — reaches the public error', () => {
     await settleAll(clock, warmup);
 
     const refused = limiter.run(() => 'c', {key: 'k', onSaturated: 'reject'});
-    await expect(refused).rejects.toThrow(QuotaPilotSaturatedError);
+    await expect(refused).rejects.toThrow(LimiterSaturatedError);
     await refused.catch((error: unknown) => {
-      const saturated = error as QuotaPilotSaturatedError;
+      const saturated = error as LimiterSaturatedError;
       expect(saturated.kind).toBe('rate');
       expect(saturated.binding).toBe('per-minute');
       expect(saturated.waitMs).toBeGreaterThan(0);

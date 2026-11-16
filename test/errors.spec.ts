@@ -1,55 +1,55 @@
 import {describe, expect, it} from 'vitest';
 
 import {
-  QuotaPilotAbortError,
-  QuotaPilotBudgetError,
-  QuotaPilotConfigError,
-  QuotaPilotError,
-  QuotaPilotKeyLimitError,
-  QuotaPilotQueueFullError,
-  QuotaPilotSaturatedError,
-  QuotaPilotTimeoutError,
+  LimiterAbortError,
+  LimiterBudgetError,
+  LimiterConfigError,
+  LimiterError,
+  LimiterKeyLimitError,
+  LimiterQueueFullError,
+  LimiterSaturatedError,
+  LimiterTimeoutError,
 } from '../src/errors.js';
 
 describe('error taxonomy', () => {
-  it('every refusal is catchable as QuotaPilotError', () => {
+  it('every refusal is catchable as LimiterError', () => {
     const errors = [
-      new QuotaPilotConfigError('x'),
-      new QuotaPilotSaturatedError('x', {kind: 'rate', waitMs: 1, binding: 'b'}),
-      new QuotaPilotQueueFullError('x'),
-      new QuotaPilotKeyLimitError('x'),
-      new QuotaPilotBudgetError('x'),
-      new QuotaPilotTimeoutError('x', {timeoutMs: 1}),
-      new QuotaPilotAbortError(),
+      new LimiterConfigError('x'),
+      new LimiterSaturatedError('x', {kind: 'rate', waitMs: 1, binding: 'b'}),
+      new LimiterQueueFullError('x'),
+      new LimiterKeyLimitError('x'),
+      new LimiterBudgetError('x'),
+      new LimiterTimeoutError('x', {timeoutMs: 1}),
+      new LimiterAbortError(),
     ];
 
     for (const error of errors) {
-      expect(error).toBeInstanceOf(QuotaPilotError);
+      expect(error).toBeInstanceOf(LimiterError);
       expect(error).toBeInstanceOf(Error);
       expect(error.stack).toBeTypeOf('string');
     }
   });
 
   it('carries an explicit name that a minifier cannot mangle away', () => {
-    expect(new QuotaPilotConfigError('x').name).toBe('QuotaPilotConfigError');
-    expect(new QuotaPilotBudgetError('x').name).toBe('QuotaPilotBudgetError');
-    expect(new QuotaPilotQueueFullError('x').name).toBe('QuotaPilotQueueFullError');
-    expect(new QuotaPilotKeyLimitError('x').name).toBe('QuotaPilotKeyLimitError');
-    expect(new QuotaPilotSaturatedError('x', {kind: 'rate', waitMs: 1, binding: 'b'}).name).toBe(
-      'QuotaPilotSaturatedError'
+    expect(new LimiterConfigError('x').name).toBe('LimiterConfigError');
+    expect(new LimiterBudgetError('x').name).toBe('LimiterBudgetError');
+    expect(new LimiterQueueFullError('x').name).toBe('LimiterQueueFullError');
+    expect(new LimiterKeyLimitError('x').name).toBe('LimiterKeyLimitError');
+    expect(new LimiterSaturatedError('x', {kind: 'rate', waitMs: 1, binding: 'b'}).name).toBe(
+      'LimiterSaturatedError'
     );
-    expect(new QuotaPilotTimeoutError('x', {timeoutMs: 1}).name).toBe('QuotaPilotTimeoutError');
+    expect(new LimiterTimeoutError('x', {timeoutMs: 1}).name).toBe('LimiterTimeoutError');
   });
 
   it("names the abort error 'AbortError' for fetch interoperability", () => {
     // Deliberately NOT the class name: callers already branch on this string.
-    const error = new QuotaPilotAbortError();
+    const error = new LimiterAbortError();
     expect(error.name).toBe('AbortError');
-    expect(error).toBeInstanceOf(QuotaPilotError);
+    expect(error).toBeInstanceOf(LimiterError);
   });
 
   it('records context when it is known and leaves it undefined otherwise', () => {
-    const withContext = new QuotaPilotBudgetError('deadline', {
+    const withContext = new LimiterBudgetError('deadline', {
       key: 'acct-1',
       attempt: 3,
       elapsedMs: 1_234,
@@ -58,7 +58,7 @@ describe('error taxonomy', () => {
     expect(withContext.attempt).toBe(3);
     expect(withContext.elapsedMs).toBe(1_234);
 
-    const bare = new QuotaPilotConfigError('bad config');
+    const bare = new LimiterConfigError('bad config');
     expect(bare.key).toBeUndefined();
     expect(bare.attempt).toBeUndefined();
     expect(bare.elapsedMs).toBeUndefined();
@@ -66,16 +66,16 @@ describe('error taxonomy', () => {
 
   it('preserves the caller error as `cause` when one exists', () => {
     const underlying = new Error('socket hang up');
-    const refusal = new QuotaPilotBudgetError('out of budget', {cause: underlying});
+    const refusal = new LimiterBudgetError('out of budget', {cause: underlying});
     expect(refusal.cause).toBe(underlying);
   });
 
   it('omits `cause` entirely when none was supplied', () => {
-    expect('cause' in new QuotaPilotConfigError('x')).toBe(false);
+    expect('cause' in new LimiterConfigError('x')).toBe(false);
   });
 
   it('exposes the saturation detail a caller needs to decide what to do', () => {
-    const error = new QuotaPilotSaturatedError('no capacity', {
+    const error = new LimiterSaturatedError('no capacity', {
       kind: 'rate',
       waitMs: 450,
       binding: 'per-second',
@@ -91,14 +91,14 @@ describe('error taxonomy', () => {
     // an OPTION — which a caller could in principle also name a constraint
     // after. `kind` is the reliable discriminator, which is why the
     // constructor requires it rather than inferring it.
-    const collision = new QuotaPilotSaturatedError('x', {
+    const collision = new LimiterSaturatedError('x', {
       kind: 'concurrency',
       waitMs: 0,
       binding: 'maxConcurrent',
     });
     expect(collision.kind).toBe('concurrency');
 
-    const ratedSameLabel = new QuotaPilotSaturatedError('x', {
+    const ratedSameLabel = new LimiterSaturatedError('x', {
       kind: 'rate',
       waitMs: 10,
       binding: 'maxConcurrent',
@@ -108,7 +108,7 @@ describe('error taxonomy', () => {
   });
 
   it('carries no cause on a timeout, because the attempt produced no error', () => {
-    const error = new QuotaPilotTimeoutError('attempt timed out', {timeoutMs: 20_000});
+    const error = new LimiterTimeoutError('attempt timed out', {timeoutMs: 20_000});
     expect(error.timeoutMs).toBe(20_000);
     expect('cause' in error).toBe(false);
   });

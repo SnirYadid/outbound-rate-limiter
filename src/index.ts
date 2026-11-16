@@ -1,5 +1,6 @@
 /**
- * QuotaPilot — outbound API rate limiting, scheduling and retries for Node.
+ * outbound-rate-limiter — rate limiting, scheduling and retries for the API
+ * calls your service MAKES, not the ones it receives.
  *
  * The surface below is everything this release line offers: multi-constraint
  * weighted token buckets, keyed partitioning with provably safe eviction,
@@ -12,7 +13,7 @@
  * hidden. The feature set is frozen for 0.1.x.
  *
  * Scope, stated once here and again on the first screen of the README:
- * QuotaPilot bounds outbound traffic from ONE Node process. Run N instances
+ * This library bounds outbound traffic from ONE Node process. Run N instances
  * and your real ceiling is N times what you configured. See
  * docs/GUARANTEES.md for what that does and does not promise.
  */
@@ -46,13 +47,13 @@ export type {RandomFn} from './random.js';
 export {createSeededRandom} from './random.js';
 
 export {
-  QuotaPilotAbortError,
-  QuotaPilotBudgetError,
-  QuotaPilotConfigError,
-  QuotaPilotError,
-  QuotaPilotKeyLimitError,
-  QuotaPilotQueueFullError,
-  QuotaPilotSaturatedError,
-  QuotaPilotTimeoutError,
+  LimiterAbortError,
+  LimiterBudgetError,
+  LimiterConfigError,
+  LimiterError,
+  LimiterKeyLimitError,
+  LimiterQueueFullError,
+  LimiterSaturatedError,
+  LimiterTimeoutError,
 } from './errors.js';
-export type {QuotaPilotErrorDetails} from './errors.js';
+export type {LimiterErrorDetails} from './errors.js';

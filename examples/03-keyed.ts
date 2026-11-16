@@ -2,7 +2,7 @@
  * Keyed limiting. Each key holds entirely separate capacity, so one busy
  * account cannot slow another.
  */
-import {createLimiter} from 'quota-pilot';
+import {createLimiter} from 'outbound-rate-limiter';
 
 export async function main(): Promise<{a: number; b: number; elapsedMs: number}> {
   const limiter = createLimiter({

@@ -2,7 +2,7 @@
  * Two limits at once — the common provider shape: a burst allowance and a
  * sustained rate. Both must permit a call before it runs.
  */
-import {createLimiter, type Decision} from 'quota-pilot';
+import {createLimiter, type Decision} from 'outbound-rate-limiter';
 
 export async function main(): Promise<{constraints: string[]; binding: string[]}> {
   const binding: string[] = [];

@@ -8,7 +8,7 @@
  * and a permanent entitlement problem at a third (D11).
  */
 
-import {QuotaPilotConfigError} from './errors.js';
+import {LimiterConfigError} from './errors.js';
 import type {RandomFn} from './random.js';
 import type {ClassifyContext, RetryPolicy, Verdict} from './types.js';
 
@@ -35,16 +35,16 @@ export interface NormalizedRetryPolicy {
 
 export function normalizeRetryPolicy(policy: RetryPolicy): NormalizedRetryPolicy {
   if (typeof policy !== 'object' || policy === null) {
-    throw new QuotaPilotConfigError('run() retry must be an object.');
+    throw new LimiterConfigError('run() retry must be an object.');
   }
 
   // Required, and deliberately so: there is no default classifier and there
   // will not be one. A policy without one is a configuration mistake, not an
   // invitation for the library to guess.
   if (typeof policy.classify !== 'function') {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       'run() retry.classify is required: it decides which errors are worth retrying. ' +
-        'QuotaPilot ships no default because the same status code means different things ' +
+        'This library ships no default because the same status code means different things ' +
         'at different providers.'
     );
   }
@@ -55,7 +55,7 @@ export function normalizeRetryPolicy(policy: RetryPolicy): NormalizedRetryPolicy
     !Number.isInteger(maxAttempts) ||
     maxAttempts < 1
   ) {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       `run() retry.maxAttempts must be an integer of 1 or more, received ` +
         `${JSON.stringify(maxAttempts)}. 1 means a single attempt and no retries.`
     );
@@ -63,7 +63,7 @@ export function normalizeRetryPolicy(policy: RetryPolicy): NormalizedRetryPolicy
 
   const jitter = policy.jitter ?? 'full';
   if (jitter !== 'full' && jitter !== 'none') {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       `run() retry.jitter must be 'full' or 'none', received ${JSON.stringify(jitter)}.`
     );
   }
@@ -71,7 +71,7 @@ export function normalizeRetryPolicy(policy: RetryPolicy): NormalizedRetryPolicy
   const baseDelayMs = positiveMs(policy.baseDelayMs, DEFAULT_BASE_DELAY_MS, 'retry.baseDelayMs');
   const maxDelayMs = positiveMs(policy.maxDelayMs, DEFAULT_MAX_DELAY_MS, 'retry.maxDelayMs');
   if (maxDelayMs < baseDelayMs) {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       `run() retry.maxDelayMs (${maxDelayMs}) must be at least retry.baseDelayMs ` +
         `(${baseDelayMs}).`
     );
@@ -79,7 +79,7 @@ export function normalizeRetryPolicy(policy: RetryPolicy): NormalizedRetryPolicy
 
   const retryOnAttemptTimeout = policy.retryOnAttemptTimeout ?? false;
   if (typeof retryOnAttemptTimeout !== 'boolean') {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       `run() retry.retryOnAttemptTimeout must be a boolean, received ` +
         `${JSON.stringify(retryOnAttemptTimeout)}.`
     );
@@ -137,7 +137,7 @@ export function providerHintMs(verdict: Verdict): number | undefined {
 function positiveMs(value: number | undefined, fallback: number, label: string): number {
   if (value === undefined) return fallback;
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       `run() ${label} must be a finite number greater than 0, received ${JSON.stringify(value)}.`
     );
   }

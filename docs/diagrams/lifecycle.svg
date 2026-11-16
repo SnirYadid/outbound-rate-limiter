@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1052" width="1080" height="1052" role="img" aria-labelledby="diagram-title diagram-desc">
-<title id="diagram-title">The lifecycle of one QuotaPilot call</title>
+<title id="diagram-title">The lifecycle of one call</title>
 <desc id="diagram-desc">A call enters limiter.run and is validated synchronously, then acquires its key's partition. Under the default onSaturated 'wait' it joins that key's bounded FIFO queue; under 'reject' it skips the queue and either starts now or fails now. The pump offers the head of the queue to atomic admission, which checks per-key concurrency, every weighted rate constraint and the global concurrency slot in one synchronous step with no await, and either commits all of them together or takes nothing. An admitted attempt runs with its own AbortSignal and optional per-attempt timeout. A failure is classified by the caller; a retry backs off, holds neither a slot nor a queue entry while it sleeps, and re-enters the tail of the same queue through normal admission.</desc>
 
 <style>
@@ -117,7 +117,7 @@
 
 <rect class="dec" x="260" y="748" width="340" height="46" rx="8"/>
 <text class="n mono" x="430" y="770" text-anchor="middle">classify(error, context)</text>
-<text class="s" x="430" y="787" text-anchor="middle">yours — QuotaPilot ships no default</text>
+<text class="s" x="430" y="787" text-anchor="middle">yours — This library ships no default</text>
 
 <rect class="box" x="260" y="828" width="340" height="58" rx="8"/>
 <text class="n" x="430" y="852" text-anchor="middle">backoff with full jitter</text>
@@ -138,28 +138,28 @@
 <text class="okt" x="130" y="690" text-anchor="middle">call resolves</text>
 
 <rect class="err" x="660" y="86" width="400" height="46" rx="8"/>
-<text class="errt mono" x="680" y="107" text-anchor="start">QuotaPilotConfigError</text>
+<text class="errt mono" x="680" y="107" text-anchor="start">LimiterConfigError</text>
 <text class="s" x="680" y="123" text-anchor="start">thrown synchronously, before any promise exists</text>
 
 <rect class="err" x="660" y="156" width="400" height="46" rx="8"/>
-<text class="errt mono" x="680" y="177" text-anchor="start">QuotaPilotKeyLimitError</text>
+<text class="errt mono" x="680" y="177" text-anchor="start">LimiterKeyLimitError</text>
 <text class="s" x="680" y="193" text-anchor="start">maxKeys reached and nothing is safe to evict</text>
 
 <rect class="err" x="660" y="302" width="400" height="46" rx="8"/>
-<text class="errt mono" x="680" y="323" text-anchor="start">QuotaPilotQueueFullError</text>
+<text class="errt mono" x="680" y="323" text-anchor="start">LimiterQueueFullError</text>
 <text class="s" x="680" y="339" text-anchor="start">this key already has maxQueueDepth waiting</text>
 
 <rect class="err" x="660" y="388" width="400" height="46" rx="8"/>
-<text class="errt mono" x="680" y="409" text-anchor="start">QuotaPilotBudgetError</text>
+<text class="errt mono" x="680" y="409" text-anchor="start">LimiterBudgetError</text>
 <text class="s" x="680" y="425" text-anchor="start">the wait, or the next backoff, passes totalBudgetMs</text>
 
 <rect class="err" x="660" y="520" width="400" height="60" rx="8"/>
-<text class="errt mono" x="680" y="541" text-anchor="start">QuotaPilotSaturatedError</text>
+<text class="errt mono" x="680" y="541" text-anchor="start">LimiterSaturatedError</text>
 <text class="s" x="680" y="557" text-anchor="start">only under onSaturated: 'reject'. kind names what blocked:</text>
 <text class="s" x="680" y="573" text-anchor="start">rate, concurrency, key-concurrency, queued-ahead</text>
 
 <rect class="err" x="660" y="656" width="400" height="46" rx="8"/>
-<text class="errt mono" x="680" y="677" text-anchor="start">QuotaPilotTimeoutError</text>
+<text class="errt mono" x="680" y="677" text-anchor="start">LimiterTimeoutError</text>
 <text class="s" x="680" y="693" text-anchor="start">attempt abandoned — whether it completed is unknown</text>
 
 <rect class="err" x="660" y="748" width="400" height="46" rx="8"/>

@@ -75,7 +75,7 @@ if (!read('CHANGELOG.md').includes(`## ${declared}`)) {
 
 // --- dist-tag -------------------------------------------------------------
 // A prerelease that lands on `latest` is installed by everyone who types
-// `npm i quota-pilot`, and a dist-tag assignment cannot be undone by deleting
+// `npm i outbound-rate-limiter`, and a dist-tag assignment cannot be undone by deleting
 // anything — only moved, after the damage.
 //
 // `publishConfig.tag` is checked here, but DO NOT TRUST IT ALONE. On npm

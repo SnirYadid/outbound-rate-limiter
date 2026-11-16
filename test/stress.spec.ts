@@ -216,7 +216,7 @@ describe('stress — what bounds accepted work', () => {
     await settleAll(clock, calls);
 
     // One running, four queued, the remaining 45 refused at the door.
-    expect(outcomes.filter((o) => o === 'QuotaPilotQueueFullError')).toHaveLength(45);
+    expect(outcomes.filter((o) => o === 'LimiterQueueFullError')).toHaveLength(45);
     expect(outcomes.filter((o) => o === 'ok')).toHaveLength(5);
   });
 

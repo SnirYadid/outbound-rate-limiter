@@ -6,7 +6,7 @@ import {
   normalizeConstraints,
   resolveIntervalMs,
 } from '../src/constraints.js';
-import {QuotaPilotConfigError} from '../src/errors.js';
+import {LimiterConfigError} from '../src/errors.js';
 import type {RateConstraint} from '../src/types.js';
 
 describe('resolveIntervalMs', () => {
@@ -57,7 +57,7 @@ describe('normalizeConstraints', () => {
   });
 
   it('rejects an empty list', () => {
-    expect(() => normalizeConstraints([])).toThrow(QuotaPilotConfigError);
+    expect(() => normalizeConstraints([])).toThrow(LimiterConfigError);
   });
 
   it('rejects a duplicate name, and says why it matters', () => {
@@ -80,7 +80,7 @@ describe('normalizeConstraints', () => {
     ['zero burst', {name: 'a', limit: 1, interval: 'second', burst: 0}],
     ['negative burst', {name: 'a', limit: 1, interval: 'second', burst: -3}],
   ])('rejects %s', (_label, constraint) => {
-    expect(() => normalizeConstraints([constraint])).toThrow(QuotaPilotConfigError);
+    expect(() => normalizeConstraints([constraint])).toThrow(LimiterConfigError);
   });
 
   it('rejects an unknown interval unit arriving from untyped JavaScript', () => {
@@ -152,6 +152,6 @@ describe('assertCostAdmissible', () => {
   });
 
   it.each([0, -1, Number.NaN, Infinity])('rejects a cost of %s', (cost) => {
-    expect(() => assertCostAdmissible(cost, constraints)).toThrow(QuotaPilotConfigError);
+    expect(() => assertCostAdmissible(cost, constraints)).toThrow(LimiterConfigError);
   });
 });

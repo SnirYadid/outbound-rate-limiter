@@ -1,20 +1,22 @@
-# QuotaPilot
+# outbound-rate-limiter
 
-Outbound API rate limiting, scheduling and retries for Node. Multi-constraint
-weighted token buckets, honest guarantees, deterministic tests, zero runtime
-dependencies.
+Rate limiting for the API calls your service **makes**, not the ones it
+receives. Multi-constraint weighted token buckets, keyed scheduling,
+concurrency control, classified retries, honest guarantees, deterministic
+tests, zero runtime dependencies.
 
 ```bash
-npm install quota-pilot@alpha
+npm install outbound-rate-limiter@alpha
 ```
 
 The `@alpha` is required, not optional: this release line is published under
-the `alpha` dist-tag, so a plain `npm install quota-pilot` will not resolve it.
+the `alpha` dist-tag, so a plain `npm install outbound-rate-limiter` will not
+resolve it.
 
-> **QuotaPilot bounds outbound traffic from one Node process.**
+> **This library bounds outbound traffic from one Node process.**
 > There is no shared store. If you run N instances, your effective ceiling is
 > N times what you configured. Hourly and daily quotas are not enforceable this
-> way and QuotaPilot will warn you if you try. Read
+> way and the limiter will warn you if you try. Read
 > [Single-process scope](#single-process-scope) before adopting it.
 
 **Status: 0.1.0-alpha.** The feature set is frozen for this line and no new
@@ -25,13 +27,13 @@ assuming the usual ones.
 
 ---
 
-## How QuotaPilot Works
+## How It Works
 
 One call, from `run()` to settled. Every box is a real code path; the three
 numbered checks happen in **one synchronous step**, which is what makes them
 all-or-nothing.
 
-![The lifecycle of one QuotaPilot call: run() validates synchronously, acquires the key's partition, then either joins that key's bounded FIFO queue or fails fast. The pump offers the head to atomic admission, which checks per-key concurrency, every weighted rate constraint and the global concurrency slot together and commits all of them or takes nothing. An admitted attempt runs with its own AbortSignal; a failure is classified by the caller, and a retry backs off and re-enters the tail of the same queue through normal admission.](https://raw.githubusercontent.com/SnirYadid/quota-pilot/main/docs/diagrams/lifecycle.svg)
+![The lifecycle of one call: run() validates synchronously, acquires the key's partition, then either joins that key's bounded FIFO queue or fails fast. The pump offers the head to atomic admission, which checks per-key concurrency, every weighted rate constraint and the global concurrency slot together and commits all of them or takes nothing. An admitted attempt runs with its own AbortSignal; a failure is classified by the caller, and a retry backs off and re-enters the tail of the same queue through normal admission.](https://raw.githubusercontent.com/SnirYadid/quota-pilot/main/docs/diagrams/lifecycle.svg)
 
 Three things the picture is trying to make obvious:
 
@@ -52,7 +54,7 @@ that actually exist, so it cannot quietly drift from the code.
 
 ## Contents
 
-- [How QuotaPilot Works](#how-quotapilot-works)
+- [How It Works](#how-it-works)
 - [What it does](#what-it-does)
 - [The problem it solves](#the-problem-it-solves)
 - [Why choose it](#why-choose-it)
@@ -77,8 +79,8 @@ that actually exist, so it cannot quietly drift from the code.
 
 ## What it does
 
-You give QuotaPilot the limits a provider published and a function that calls
-it. QuotaPilot decides **when** that function runs, holds it back when running
+You give the limiter the limits a provider published and a function that calls
+it. The limiter decides **when** that function runs, holds it back when running
 it now would breach a limit, retries it when you say an error is worth
 retrying, and tells you afterwards which limit made it wait.
 
@@ -122,12 +124,12 @@ problems, in this order:
 10. And an in-memory limiter quietly stops being a limit the moment the service
     scales out.
 
-QuotaPilot addresses 1, 2, 3, 5, 6, 8 and 9 directly; is explicit about 10; and
+This library addresses 1, 2, 3, 5, 6, 8 and 9 directly; is explicit about 10; and
 deliberately refuses to guess at 4.
 
 ## Why choose it
 
-Most rate limiters do one of these things. QuotaPilot's case for existing is
+Most rate limiters do one of these things. the library's case for existing is
 that the hard part is doing them **together**, under one admission step, with
 the interactions written down.
 
@@ -177,7 +179,7 @@ CommonJS, with types for each; no bundler is involved in the build.
 ## Minimal example
 
 ```ts
-import {createLimiter} from 'quota-pilot';
+import {createLimiter} from 'outbound-rate-limiter';
 
 const limiter = createLimiter({
   constraints: [{name: 'per-second', limit: 5, interval: 'second'}],
@@ -197,7 +199,7 @@ documented result asserted. They are not illustrations; they run in CI.
 ## Declaring constraints
 
 ```ts
-import type {RateConstraint} from 'quota-pilot';
+import type {RateConstraint} from 'outbound-rate-limiter';
 
 // "5 per second, and 100 per minute" — both enforced at once.
 const constraints: RateConstraint[] = [
@@ -216,14 +218,14 @@ call". `interval` takes milliseconds or `'second' | 'minute' | 'hour' | 'day'`.
 `burst` defaults to `limit` and is also the largest `cost` the constraint can
 ever admit.
 
-Invalid configuration throws `QuotaPilotConfigError` synchronously, naming the
+Invalid configuration throws `LimiterConfigError` synchronously, naming the
 field. Constraints that cannot be enforced in memory — an hour or longer —
 are accepted but produce a `limiter.warnings` entry rather than silently
 pretending.
 
 [docs/GUARANTEES.md](docs/GUARANTEES.md#provider-wording-mapped) maps common
 provider wording onto these fields, including the two cases where the answer is
-"do not use QuotaPilot for this".
+"do not use the limiter for this".
 
 ## Several limits at once
 
@@ -288,7 +290,7 @@ refunded — not on failure, not on timeout, not on cancellation after the attem
 began. A request that was sent was paid for.
 
 A cost above a constraint's `burst` could never be admitted, so it throws
-`QuotaPilotConfigError` immediately rather than waiting forever.
+`LimiterConfigError` immediately rather than waiting forever.
 ([`examples/04-weighted-cost.ts`](examples/04-weighted-cost.ts))
 
 ## Failing fast instead of waiting
@@ -297,12 +299,12 @@ The default is to queue. Pass `onSaturated: 'reject'` to find out immediately,
 and exactly what stopped you:
 
 ```ts
-import {QuotaPilotSaturatedError} from 'quota-pilot';
+import {LimiterSaturatedError} from 'outbound-rate-limiter';
 
 try {
   await limiter.run(() => fetchPage(url), {key: acct, onSaturated: 'reject'});
 } catch (error) {
-  if (error instanceof QuotaPilotSaturatedError) {
+  if (error instanceof LimiterSaturatedError) {
     error.kind;    // 'rate' | 'concurrency' | 'key-concurrency' | 'queued-ahead'
     error.binding; // which limit — for 'rate', the constraint's own name
     error.waitMs;  // how long waiting would have taken
@@ -316,7 +318,7 @@ slot and no timer.
 
 ## Retries
 
-You classify; QuotaPilot schedules. There is no default classifier and there
+You classify; the limiter schedules. There is no default classifier and there
 will not be one:
 
 ```ts
@@ -363,13 +365,13 @@ Four endings, deliberately distinguishable:
 | Ending | What you catch |
 |---|---|
 | Attempts exhausted, or `{retry: false}` | **your error**, unchanged |
-| `totalBudgetMs` would be exceeded | `QuotaPilotBudgetError`, `cause` = your last error |
-| `signal` aborted | the signal's `reason`, else `QuotaPilotAbortError` |
-| `attemptTimeoutMs` fired, no retry | `QuotaPilotTimeoutError`, **no `cause`** — abandoned, not failed |
+| `totalBudgetMs` would be exceeded | `LimiterBudgetError`, `cause` = your last error |
+| `signal` aborted | the signal's `reason`, else `LimiterAbortError` |
+| `attemptTimeoutMs` fired, no retry | `LimiterTimeoutError`, **no `cause`** — abandoned, not failed |
 
-The rule: if QuotaPilot stopped for a reason of its own it throws its own error;
+The rule: if the limiter stopped for a reason of its own it throws its own error;
 if it ran out of the attempts you configured, or your classifier said stop, your
-error surfaces unchanged. So `catch (e) { if (e instanceof QuotaPilotError) }`
+error surfaces unchanged. So `catch (e) { if (e instanceof LimiterError) }`
 reads as "the limiter refused", never "the request failed".
 ([`examples/05-retries.ts`](examples/05-retries.ts))
 
@@ -519,7 +521,7 @@ clock anomalies: [docs/GUARANTEES.md](docs/GUARANTEES.md#the-rate-guarantee).
 ## Observable versus physical concurrency
 
 `attemptTimeoutMs` aborts the signal handed to your function and stops waiting
-for its promise. QuotaPilot cannot force your code to stop.
+for its promise. The limiter cannot force your code to stop.
 
 If your function ignores its signal, it keeps running after the timeout. The
 consequences are bounded and named:
@@ -528,7 +530,7 @@ consequences are bounded and named:
   promise finally settles. Holding it would be more faithful to reality, but one
   function that never settles would then deadlock the limiter permanently. A
   misbehaving task should degrade the bound, not stop the world.
-- **`maxConcurrent` is therefore conditional.** It bounds attempts QuotaPilot
+- **`maxConcurrent` is therefore conditional.** It bounds attempts the limiter
   can *observe*. Real concurrency may exceed the cap by the number of tasks
   ignoring their signals.
 - **Capacity is not conditional.** The abandoned attempt paid at admission and

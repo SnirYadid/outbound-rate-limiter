@@ -14,7 +14,7 @@
 
 import {createBucket, isFull, type BucketState} from './bucket.js';
 import type {NormalizedConstraint} from './constraints.js';
-import {QuotaPilotKeyLimitError} from './errors.js';
+import {LimiterKeyLimitError} from './errors.js';
 import {BoundedFifo} from './queue.js';
 import type {CancelTimer, Clock} from './time.js';
 
@@ -157,7 +157,7 @@ export function createPartitionRegistry(
         // missed cleanup.
         sweep(now);
         if (partitions.size >= maxKeys) {
-          throw new QuotaPilotKeyLimitError(
+          throw new LimiterKeyLimitError(
             `Cannot track a new key: ${partitions.size} keys are in use and none can be ` +
               'evicted safely (each has queued or running work, or capacity it has not yet ' +
               'paid back). Raise maxKeys, or use a coarser key — a key derived from a ' +

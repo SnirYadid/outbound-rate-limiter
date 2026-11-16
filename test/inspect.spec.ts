@@ -14,7 +14,7 @@
 
 import {describe, expect, it} from 'vitest';
 
-import {QuotaPilotConfigError, QuotaPilotKeyLimitError} from '../src/errors.js';
+import {LimiterConfigError, LimiterKeyLimitError} from '../src/errors.js';
 import {createLimiter} from '../src/limiter.js';
 import {createSeededRandom} from '../src/random.js';
 import type {RateConstraint} from '../src/types.js';
@@ -64,7 +64,7 @@ describe('inspect — shape and content', () => {
     const held = limiter.run(() => gate.promise, {key: 'occupant'});
 
     // A `run()` on a second key cannot be served.
-    await expect(limiter.run(() => 'x', {key: 'other'})).rejects.toThrow(QuotaPilotKeyLimitError);
+    await expect(limiter.run(() => 'x', {key: 'other'})).rejects.toThrow(LimiterKeyLimitError);
     // Inspection of that same key is still fine.
     expect(limiter.inspect('other').tracked).toBe(false);
 
@@ -157,7 +157,7 @@ describe('inspect — shape and content', () => {
 
   it('rejects a non-string key synchronously', () => {
     const {limiter} = build(tenPerSecond);
-    expect(() => limiter.inspect(7 as unknown as string)).toThrow(QuotaPilotConfigError);
+    expect(() => limiter.inspect(7 as unknown as string)).toThrow(LimiterConfigError);
   });
 
   it('hands out frozen copies, not live state', async () => {

@@ -1,7 +1,7 @@
 /**
  * The smallest useful limiter: one limit, one call.
  */
-import {createLimiter} from 'quota-pilot';
+import {createLimiter} from 'outbound-rate-limiter';
 
 export async function main(): Promise<string[]> {
   const limiter = createLimiter({

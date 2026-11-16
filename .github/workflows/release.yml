@@ -124,7 +124,7 @@ jobs:
       - name: Upload the tarball as a build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: quota-pilot-${{ inputs.version }}
+          name: outbound-rate-limiter-${{ inputs.version }}
           path: ${{ runner.temp }}/*.tgz
           if-no-files-found: error
 
@@ -159,6 +159,6 @@ jobs:
             echo "  npm stage reject <stage-id>     # discards it"
           else
             echo "Published ${{ inputs.version }} with dist-tag alpha. It is live."
-            echo "  npm view quota-pilot@alpha version"
-            echo "  npm install quota-pilot@alpha"
+            echo "  npm view outbound-rate-limiter@alpha version"
+            echo "  npm install outbound-rate-limiter@alpha"
           fi

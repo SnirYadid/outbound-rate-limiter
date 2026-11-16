@@ -4,7 +4,7 @@
  * Every function here takes `now` as an argument and returns new state. That
  * is not stylistic: it is what lets the scheduler run a multi-constraint
  * check-and-consume as ONE synchronous block with no `await` inside it, which
- * is where QuotaPilot's atomicity guarantee comes from.
+ * is where the library's atomicity guarantee comes from.
  *
  * The guarantees this module provides, and what they do NOT cover, are stated
  * in docs/GUARANTEES.md. The short version:
@@ -12,7 +12,7 @@
  *   over any window [t1, t2],  total admitted cost <= capacity + rate*(t2-t1)
  *
  * That bound is tight, it holds for heterogeneous costs, and it is the only
- * quantitative claim QuotaPilot makes about a constraint.
+ * quantitative claim the limiter makes about a constraint.
  */
 
 /**

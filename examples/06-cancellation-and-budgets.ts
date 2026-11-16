@@ -4,7 +4,7 @@
  * Cancelling before an attempt starts spends no capacity. Cancelling after one
  * starts refunds nothing — the request was sent.
  */
-import {createLimiter, QuotaPilotBudgetError} from 'quota-pilot';
+import {createLimiter, LimiterBudgetError} from 'outbound-rate-limiter';
 
 export async function main(): Promise<{aborted: boolean; budgeted: boolean}> {
   const limiter = createLimiter({
@@ -16,7 +16,7 @@ export async function main(): Promise<{aborted: boolean; budgeted: boolean}> {
   const cancellable = limiter.run(
     ({signal}) =>
       new Promise<string>((_resolve, reject) => {
-        // Thread the signal into whatever you call. QuotaPilot asks your task
+        // Thread the signal into whatever you call. The limiter asks your task
         // to stop; it cannot compel it.
         signal.addEventListener('abort', () => {
           reject(signal.reason as Error);
@@ -57,7 +57,7 @@ export async function main(): Promise<{aborted: boolean; budgeted: boolean}> {
       }
     );
   } catch (error) {
-    budgeted = error instanceof QuotaPilotBudgetError;
+    budgeted = error instanceof LimiterBudgetError;
   }
 
   return {aborted, budgeted};

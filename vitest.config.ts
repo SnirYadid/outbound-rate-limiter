@@ -7,7 +7,7 @@ export default defineConfig({
     alias: {
       // Mirrors the tsconfig path mapping, so the examples import the package
       // by name and the README can quote them verbatim.
-      'quota-pilot': fileURLToPath(new URL('./src/index.ts', import.meta.url)),
+      'outbound-rate-limiter': fileURLToPath(new URL('./src/index.ts', import.meta.url)),
     },
   },
   test: {

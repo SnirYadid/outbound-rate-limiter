@@ -1,6 +1,6 @@
 # Guarantees and limitations
 
-What QuotaPilot promises, what it does not, and which promises depend on your
+What this library promises, what it does not, and which promises depend on your
 code cooperating. Read the limitations before the guarantees; they are the part
 that decides whether this library fits your problem.
 
@@ -8,14 +8,14 @@ that decides whether this library fits your problem.
 
 ## Scope: one process
 
-QuotaPilot keeps all of its state in the Node process that created the limiter.
+All state lives in the Node process that created the limiter.
 
 **If you run N instances, your effective ceiling is N times what you
 configured.** There is no shared store, no coordination, and no plan to add one
 in 0.1.x. Every telemetry event carries `scope: 'process'` so this is visible
 in your logs rather than only here.
 
-This makes QuotaPilot a good fit for:
+This makes it a good fit for:
 
 - a worker, job runner or CLI with a known instance count
 - pacing within one request handler
@@ -96,7 +96,7 @@ release does not implement.
 | "at most N in any rolling minute", all calls equal | **Yes, with no bursting.** | `limit: N, interval: 'minute', burst: 1` |
 | "at most N in any rolling minute", weighted calls | **No.** Overshoot bounded by `max(cost)`; see above. | Tightest: `burst: max(cost)` |
 | "N per minute, resets on the clock minute" | **Approximated conservatively.** The bucket paces smoothly and never exploits the reset, so you under-use the quota by up to `B` per window. | Default |
-| "N per hour" / "N per day" | **No. Do not use QuotaPilot for this.** | Produces a warning |
+| "N per hour" / "N per day" | **No. Do not use this library for this.** | Produces a warning |
 
 ### Floating-point slack
 
@@ -128,7 +128,7 @@ identical** to keeping it. Therefore:
 
 - A key is evicted **only** when every one of its buckets is provably back at
   capacity, and it has no queued and no in-flight work.
-- `maxKeys` is enforced by **refusing a new key** (`QuotaPilotKeyLimitError`),
+- `maxKeys` is enforced by **refusing a new key** (`LimiterKeyLimitError`),
   never by discarding a partially drained one.
 
 LRU eviction is specifically **not** used. Evicting a drained bucket and
@@ -152,7 +152,7 @@ A call that cannot start is queued, not refused. What that queue guarantees:
 | **Q4** | There is **no** ordering guarantee *between* keys beyond Q3. Each key progresses on its own. |
 | **Q5** | `maxConcurrent` bounds calls running across all keys; `maxConcurrentPerKey` bounds them within one key. Both are respected simultaneously. |
 | **Q6** | A concurrency slot is released exactly once per call, on success, on a thrown error, and on a rejected promise alike. |
-| **Q7** | Each key's queue is bounded by `maxQueueDepth`. Exceeding it rejects the returned promise with `QuotaPilotQueueFullError`, naming the key — it never grows without bound. |
+| **Q7** | Each key's queue is bounded by `maxQueueDepth`. Exceeding it rejects the returned promise with `LimiterQueueFullError`, naming the key — it never grows without bound. |
 | **Q8** | No polling. Every stop has exactly one matching wake: a timer for rate, the semaphore's waiter list for a slot, a call's own completion for per-key concurrency, the next enqueue for an empty queue. |
 | **Q9** | Liveness: if your tasks settle, every queued call eventually runs or rejects, every queue drains, and no timer is left behind. |
 
@@ -161,11 +161,11 @@ A call that cannot start is queued, not refused. What that queue guarantees:
 | Condition | Outcome |
 |---|---|
 | No capacity yet, `onSaturated: 'wait'` (default) | **Queued.** Waiting is the default. |
-| No capacity yet, `onSaturated: 'reject'` | Promise rejects, `QuotaPilotSaturatedError` |
-| `maxQueueDepth` reached for that key | Promise rejects, `QuotaPilotQueueFullError` |
-| `maxKeys` reached and nothing safe to evict | Promise rejects, `QuotaPilotKeyLimitError` |
-| `cost` above some constraint's `burst` | **Throws synchronously**, `QuotaPilotConfigError` — it could never be admitted, so waiting would be a hang |
-| Invalid configuration | **Throws synchronously**, `QuotaPilotConfigError` |
+| No capacity yet, `onSaturated: 'reject'` | Promise rejects, `LimiterSaturatedError` |
+| `maxQueueDepth` reached for that key | Promise rejects, `LimiterQueueFullError` |
+| `maxKeys` reached and nothing safe to evict | Promise rejects, `LimiterKeyLimitError` |
+| `cost` above some constraint's `burst` | **Throws synchronously**, `LimiterConfigError` — it could never be admitted, so waiting would be a hang |
+| Invalid configuration | **Throws synchronously**, `LimiterConfigError` |
 
 ### `onSaturated: 'reject'` — start now, or fail now
 
@@ -206,7 +206,7 @@ Three measured facts, each pinned by a test in `test/stress.spec.ts`:
 
 | | |
 |---|---|
-| **The bound works on what it is for.** | 50 calls at `maxQueueDepth: 4` against a 1/minute limit: 1 ran, 4 queued, **45 refused** with `QuotaPilotQueueFullError`. |
+| **The bound works on what it is for.** | 50 calls at `maxQueueDepth: 4` against a 1/minute limit: 1 ran, 4 queued, **45 refused** with `LimiterQueueFullError`. |
 | **A retry re-enters past the bound.** | A retry goes to the tail of its key's queue without a depth check, because it was already accepted. With `maxQueueDepth: 2`, a retry storm was measured holding **more than 2** queued. |
 | **Backing-off work is not in the queue at all.** | A sleeping retry holds no queue entry (R5), so it frees intake room while still being work the limiter owes you. With `maxQueueDepth: 2`, accepted-unsettled work peaked at **several times** that. |
 
@@ -311,7 +311,7 @@ Pass an `AbortSignal` as `RunOptions.signal`. It is honoured in every state:
 | **C3** | Each logical call settles exactly once, however abort, timeout, retry and completion interleave. |
 | **C4** | Every path releases its resources exactly once — queue entry, timers, partition claim, concurrency accounting and the abort listener. |
 | **C5** | A cancelled call stops its retry sequence; no further attempt is made. |
-| **C6** | The rejection is the signal's own `reason` when it has one, otherwise `QuotaPilotAbortError`. Either way `error.name === 'AbortError'`. |
+| **C6** | The rejection is the signal's own `reason` when it has one, otherwise `LimiterAbortError`. Either way `error.name === 'AbortError'`. |
 
 Each attempt also receives its own `AbortSignal` on `AttemptContext`, aborted
 by your signal **or** by `attemptTimeoutMs`. Thread it into whatever you call.
@@ -391,7 +391,7 @@ task before suspecting the limiter.
 ## Guarantees conditional on cooperative cancellation
 
 `attemptTimeoutMs` aborts the `AbortSignal` handed to your function and stops
-waiting for its promise. QuotaPilot cannot force your code to stop.
+waiting for its promise. The limiter cannot force your code to stop.
 
 **If your function ignores its signal, it keeps running after the timeout.**
 The consequences are bounded and named:
@@ -400,7 +400,7 @@ The consequences are bounded and named:
 |---|---|
 | **Concurrency slot** | Released at the timeout, not when the abandoned promise finally settles. The same applies to cancellation: the slot is freed when the abort lands, not when the task notices. |
 | **Why** | Holding the slot would be more faithful to reality, but one function that never settles would then deadlock the limiter permanently. A misbehaving task should degrade the bound, not stop the world. |
-| **`maxConcurrent`** | **Conditional.** It bounds attempts QuotaPilot can **observe**. A task that ignores its signal after a timeout or a cancellation keeps running physically, so real concurrency may exceed the cap by the number of such tasks. QuotaPilot asks; it cannot compel. |
+| **`maxConcurrent`** | **Conditional.** It bounds attempts the limiter can **observe**. A task that ignores its signal after a timeout or a cancellation keeps running physically, so real concurrency may exceed the cap by the number of such tasks. It asks; it cannot compel. |
 | **Capacity (G2)** | **Not conditional.** The abandoned attempt consumed its cost at admission and is never refunded. |
 | **Late completion** | Discarded. It cannot return a value to the caller and cannot affect control flow, and its rejection is absorbed so an abandoned promise cannot crash the process with an unhandled rejection. No event is emitted for it: the call already reported its outcome, and a second terminal event would make the stream lie about how many calls there were. |
 | **`drain()`** | **Conditional.** It waits for calls it can still observe. An attempt abandoned at its timeout is no longer observable, so a drain can resolve while that work is physically still running. |
@@ -413,7 +413,7 @@ There is deliberately no `stats().abandoned`. Such a counter could only ever
 grow — an abandoned task may never settle, so nothing could decrement it — and
 a number that only rises is a leak wearing a metric's clothing. Count
 `refused` events with `reason: 'timeout'` in your telemetry instead: that is
-exactly how often QuotaPilot gave up on an attempt, and it is a real
+exactly how often the limiter gave up on an attempt, and it is a real
 measurement rather than a running total of regrets.
 
 ---
@@ -426,20 +426,20 @@ These are deliberately distinguishable, because the right response differs.
 |---|---|---|
 | Attempts exhausted after ordinary errors | **your last error**, unchanged | `attempts` |
 | Your classifier returned `{retry: false}` | **your error**, unchanged | `not-retryable` |
-| `totalBudgetMs` would be exceeded | `QuotaPilotBudgetError`, `cause` = your last error if any | `budget` |
-| `signal` aborted | the signal's `reason`, else `QuotaPilotAbortError` (`name: 'AbortError'`) | `aborted` |
-| `attemptTimeoutMs` fired and the attempt was not retried | `QuotaPilotTimeoutError`, **no `cause`** — the attempt produced no error, it was abandoned | `timeout` |
+| `totalBudgetMs` would be exceeded | `LimiterBudgetError`, `cause` = your last error if any | `budget` |
+| `signal` aborted | the signal's `reason`, else `LimiterAbortError` (`name: 'AbortError'`) | `aborted` |
+| `attemptTimeoutMs` fired and the attempt was not retried | `LimiterTimeoutError`, **no `cause`** — the attempt produced no error, it was abandoned | `timeout` |
 
-The governing rule: **if QuotaPilot stopped for a reason of its own, it throws
+The governing rule: **if the limiter stopped for a reason of its own, it throws
 its own error. If it ran out of the attempts you configured, or your classifier
 said stop, your error surfaces.** So `catch (e) { if (e instanceof
-QuotaPilotError) }` reads as "the limiter refused", never "the request failed".
+LimiterError) }` reads as "the limiter refused", never "the request failed".
 
 ### No classifier, no retries
 
 - No `retry` option: exactly one attempt. Any error propagates unchanged. None
   of the retry machinery engages.
-- `retry` given without `classify`: `QuotaPilotConfigError`, thrown
+- `retry` given without `classify`: `LimiterConfigError`, thrown
   synchronously. There is no default classifier and there will not be one —
   `429` means a transient throttle at one provider, an exhausted hourly budget
   at the next and a permanent entitlement problem at a third. Guessing is worse

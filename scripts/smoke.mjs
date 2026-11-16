@@ -25,7 +25,7 @@ let workspace;
 let failed = false;
 
 try {
-  workspace = mkdtempSync(join(tmpdir(), 'quotapilot-smoke-'));
+  workspace = mkdtempSync(join(tmpdir(), 'outbound-rl-smoke-'));
   log(`workspace: ${workspace}`);
 
   // --- pack -------------------------------------------------------------
@@ -122,19 +122,19 @@ try {
     `import assert from 'node:assert/strict';
 import {
   VERSION,
-  QuotaPilotConfigError,
-  QuotaPilotError,
-  QuotaPilotQueueFullError,
-  QuotaPilotSaturatedError,
-  QuotaPilotTimeoutError,
+  LimiterConfigError,
+  LimiterError,
+  LimiterQueueFullError,
+  LimiterSaturatedError,
+  LimiterTimeoutError,
   createLimiter,
   createSeededRandom,
   realClock,
-} from 'quota-pilot';
+} from 'outbound-rate-limiter';
 
 assert.equal(typeof VERSION, 'string', 'VERSION should be a string');
-assert.ok(new QuotaPilotConfigError('x') instanceof QuotaPilotError, 'error hierarchy');
-assert.equal(new QuotaPilotConfigError('x').name, 'QuotaPilotConfigError');
+assert.ok(new LimiterConfigError('x') instanceof LimiterError, 'error hierarchy');
+assert.equal(new LimiterConfigError('x').name, 'LimiterConfigError');
 assert.equal(createSeededRandom(1)(), createSeededRandom(1)(), 'seeded random is reproducible');
 assert.equal(typeof realClock.now(), 'number');
 assert.ok(realClock.now() > 0, 'monotonic clock should be positive');
@@ -165,7 +165,7 @@ assert.deepEqual(
 );
 
 // A cost no constraint can admit fails synchronously, not as a rejection.
-assert.throws(() => limiter.run(() => 1, {cost: 99}), QuotaPilotConfigError);
+assert.throws(() => limiter.run(() => 1, {cost: 99}), LimiterConfigError);
 
 // The limiter waits rather than refusing: a 4th call on a 3/second limit is
 // queued and still resolves.
@@ -181,7 +181,7 @@ const tiny = createLimiter({
 });
 const held = tiny.run(() => new Promise((r) => realClock.setTimer(r, 20)));
 const queued = tiny.run(() => 'queued').catch(() => 'rejected');
-await assert.rejects(() => tiny.run(() => 'overflow'), QuotaPilotQueueFullError);
+await assert.rejects(() => tiny.run(() => 'overflow'), LimiterQueueFullError);
 void held;
 void queued;
 
@@ -196,7 +196,7 @@ assert.equal(await strict.run(() => 'first', {key: 'acct'}), 'first');
 const refused = await strict
   .run(() => 'second', {key: 'acct', onSaturated: 'reject'})
   .then(() => null, (error) => error);
-assert.ok(refused instanceof QuotaPilotSaturatedError, 'expected a saturation refusal');
+assert.ok(refused instanceof LimiterSaturatedError, 'expected a saturation refusal');
 assert.equal(refused.kind, 'rate');
 assert.equal(refused.binding, 'slow', 'the slower constraint is the binding one');
 assert.ok(refused.waitMs > 0);
@@ -265,7 +265,7 @@ assert.equal(surfaced, permanent, 'the original error object must survive');
 const timedOut = await retrying
   .run(() => new Promise(() => {}), {key: 'acct', attemptTimeoutMs: 20})
   .then(() => null, (error) => error);
-assert.ok(timedOut instanceof QuotaPilotTimeoutError, 'expected a timeout error');
+assert.ok(timedOut instanceof LimiterTimeoutError, 'expected a timeout error');
 assert.equal(timedOut.timeoutMs, 20);
 assert.equal('cause' in timedOut, false, 'a timeout produced no error to carry');
 
@@ -333,14 +333,14 @@ console.log('esm ok, version', VERSION);
     `const assert = require('node:assert/strict');
 const {
   VERSION,
-  QuotaPilotConfigError,
-  QuotaPilotError,
+  LimiterConfigError,
+  LimiterError,
   createLimiter,
   createSeededRandom,
-} = require('quota-pilot');
+} = require('outbound-rate-limiter');
 
 assert.equal(typeof VERSION, 'string');
-assert.ok(new QuotaPilotConfigError('x') instanceof QuotaPilotError);
+assert.ok(new LimiterConfigError('x') instanceof LimiterError);
 assert.equal(createSeededRandom(2)(), createSeededRandom(2)());
 
 (async () => {
@@ -395,7 +395,7 @@ assert.equal(createSeededRandom(2)(), createSeededRandom(2)());
   installFixture(typesDir, tarball, {type: 'module'});
   writeFileSync(
     join(typesDir, 'check.ts'),
-    `import {createLimiter, QuotaPilotConfigError, VERSION} from 'quota-pilot';
+    `import {createLimiter, LimiterConfigError, VERSION} from 'outbound-rate-limiter';
 import type {
   AttemptContext,
   ClassifyContext,
@@ -410,7 +410,7 @@ import type {
   RunOptions,
   SaturationKind,
   Verdict,
-} from 'quota-pilot';
+} from 'outbound-rate-limiter';
 
 const constraint: RateConstraint = {name: 'per-second', limit: 10, interval: 'second'};
 const options: LimiterOptions = {constraints: [constraint], maxConcurrent: 4};
@@ -435,7 +435,7 @@ const drained: Promise<void> = limiter.drain();
 const errorCount: number = limiter.stats().decisionHookErrors;
 const ctxSignal: (ctx: AttemptContext) => AbortSignal = (ctx) => ctx.signal;
 const version: string = VERSION;
-const error: Error = new QuotaPilotConfigError('nope');
+const error: Error = new LimiterConfigError('nope');
 export {
   constraint,
   limiter,
@@ -507,7 +507,7 @@ function installFixture(dir, tarball, extra) {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  if (!readdirSync(join(dir, 'node_modules')).includes('quota-pilot')) {
+  if (!readdirSync(join(dir, 'node_modules')).includes('outbound-rate-limiter')) {
     throw new Error(`tarball did not install into ${dir}`);
   }
 }

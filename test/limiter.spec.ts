@@ -2,9 +2,9 @@ import {describe, expect, it} from 'vitest';
 
 import {createLimiter} from '../src/limiter.js';
 import {
-  QuotaPilotConfigError,
-  QuotaPilotKeyLimitError,
-  QuotaPilotQueueFullError,
+  LimiterConfigError,
+  LimiterKeyLimitError,
+  LimiterQueueFullError,
 } from '../src/errors.js';
 import type {AttemptContext, RateConstraint} from '../src/types.js';
 import {deferred, ignore, type Deferred} from './harness/deferred.js';
@@ -38,12 +38,12 @@ function recorder(clock: VirtualClock) {
 
 describe('createLimiter — configuration', () => {
   it('requires at least one constraint', () => {
-    expect(() => createLimiter({constraints: []})).toThrow(QuotaPilotConfigError);
+    expect(() => createLimiter({constraints: []})).toThrow(LimiterConfigError);
   });
 
   it('rejects a non-object options bag', () => {
     expect(() => createLimiter(null as unknown as {constraints: []})).toThrow(
-      QuotaPilotConfigError
+      LimiterConfigError
     );
   });
 
@@ -57,7 +57,7 @@ describe('createLimiter — configuration', () => {
     ['maxKeys', 0],
   ])('rejects %s = %s', (option, value) => {
     expect(() => createLimiter({constraints: perSecond10, [option]: value})).toThrow(
-      QuotaPilotConfigError
+      LimiterConfigError
     );
   });
 
@@ -74,7 +74,7 @@ describe('createLimiter — configuration', () => {
 
   it('rejects a negative sweep interval', () => {
     expect(() => createLimiter({constraints: perSecond10, sweepIntervalMs: -1})).toThrow(
-      QuotaPilotConfigError
+      LimiterConfigError
     );
   });
 
@@ -87,19 +87,19 @@ describe('createLimiter — configuration', () => {
   it('rejects a cost no constraint could admit, synchronously', () => {
     const {limiter} = build(perSecond10);
     // Not a rejected promise: a cost above capacity is a programming error.
-    expect(() => limiter.run(() => 'x', {cost: 11})).toThrow(QuotaPilotConfigError);
+    expect(() => limiter.run(() => 'x', {cost: 11})).toThrow(LimiterConfigError);
   });
 
   it.each([0, -1, Number.NaN])('rejects cost %s synchronously', (cost) => {
     const {limiter} = build(perSecond10);
-    expect(() => limiter.run(() => 'x', {cost})).toThrow(QuotaPilotConfigError);
+    expect(() => limiter.run(() => 'x', {cost})).toThrow(LimiterConfigError);
   });
 
   it('rejects a non-function task and a non-string key', () => {
     const {limiter} = build(perSecond10);
-    expect(() => limiter.run(undefined as unknown as () => void)).toThrow(QuotaPilotConfigError);
+    expect(() => limiter.run(undefined as unknown as () => void)).toThrow(LimiterConfigError);
     expect(() => limiter.run(() => 'x', {key: 7 as unknown as string})).toThrow(
-      QuotaPilotConfigError
+      LimiterConfigError
     );
   });
 });
@@ -145,7 +145,7 @@ describe('run() — validation contract', () => {
       thrown = error;
     }
 
-    expect(thrown).toBeInstanceOf(QuotaPilotConfigError);
+    expect(thrown).toBeInstanceOf(LimiterConfigError);
     expect((thrown as Error).message).toMatch(message);
   });
 
@@ -205,7 +205,7 @@ describe('run() — validation contract', () => {
     const {limiter} = build(perSecond10);
 
     expect(() => limiter.run(() => 'x', {key: 'never-tracked', cost: 0})).toThrow(
-      QuotaPilotConfigError
+      LimiterConfigError
     );
 
     expect(limiter.stats()).toMatchObject({keys: 0, queued: 0, inflight: 0});
@@ -766,7 +766,7 @@ describe('MANDATORY 6 — rejected asynchronous tasks', () => {
 });
 
 describe('MANDATORY 7 — queue saturation', () => {
-  it('rejects past maxQueueDepth with a QuotaPilotQueueFullError', async () => {
+  it('rejects past maxQueueDepth with a LimiterQueueFullError', async () => {
     const {clock, limiter} = build(paced, {maxQueueDepth: 2});
     const gate = deferred();
 
@@ -778,7 +778,7 @@ describe('MANDATORY 7 — queue saturation', () => {
     ];
 
     await expect(limiter.run(() => 'overflow', {key: 'k'})).rejects.toThrow(
-      QuotaPilotQueueFullError
+      LimiterQueueFullError
     );
 
     gate.resolve();
@@ -814,7 +814,7 @@ describe('MANDATORY 7 — queue saturation', () => {
     const {clock, limiter} = build(paced, {maxQueueDepth: 1});
     const first = ignore(limiter.run(() => 'x', {key: 'k'}));
     const second = ignore(limiter.run(() => 'y', {key: 'k'}));
-    await expect(limiter.run(() => 'z', {key: 'k'})).rejects.toThrow(QuotaPilotQueueFullError);
+    await expect(limiter.run(() => 'z', {key: 'k'})).rejects.toThrow(LimiterQueueFullError);
 
     await settleAll(clock, [first, second]);
 
@@ -985,7 +985,7 @@ describe('registry exhaustion (MANDATORY 9)', () => {
       limiter.run(() => gates[1]!.promise, {key: 'b'}),
     ];
 
-    await expect(limiter.run(() => 'x', {key: 'c'})).rejects.toThrow(QuotaPilotKeyLimitError);
+    await expect(limiter.run(() => 'x', {key: 'c'})).rejects.toThrow(LimiterKeyLimitError);
 
     gates[0]?.resolve();
     gates[1]?.resolve();
@@ -1012,7 +1012,7 @@ describe('registry exhaustion (MANDATORY 9)', () => {
     // 'a' has spent its single token, so it is NOT yet disposable: evicting it
     // now would hand back capacity it has not paid for.
     await expect(limiter.run(() => 'too-soon', {key: 'b'})).rejects.toThrow(
-      QuotaPilotKeyLimitError
+      LimiterKeyLimitError
     );
 
     // After a full refill it carries no information, so it can go.

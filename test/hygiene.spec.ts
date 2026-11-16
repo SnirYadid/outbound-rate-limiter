@@ -257,14 +257,14 @@ describe('public surface', () => {
     // A deliberate snapshot: adding an export should be a visible decision,
     // and nothing internal should leak out by accident.
     expect(Object.keys(publicApi).sort()).toEqual([
-      'QuotaPilotAbortError',
-      'QuotaPilotBudgetError',
-      'QuotaPilotConfigError',
-      'QuotaPilotError',
-      'QuotaPilotKeyLimitError',
-      'QuotaPilotQueueFullError',
-      'QuotaPilotSaturatedError',
-      'QuotaPilotTimeoutError',
+      'LimiterAbortError',
+      'LimiterBudgetError',
+      'LimiterConfigError',
+      'LimiterError',
+      'LimiterKeyLimitError',
+      'LimiterQueueFullError',
+      'LimiterSaturatedError',
+      'LimiterTimeoutError',
       'VERSION',
       'createLimiter',
       'createSeededRandom',
@@ -277,9 +277,9 @@ describe('public surface', () => {
     for (const internal of [
       // Removed from the public surface in the day-6 audit: `defaultRandom`
       // gave no capability (omit `random` to get it) and
-      // `QuotaPilotClosedError` was never thrown by anything.
+      // `the limiterClosedError` was never thrown by anything.
       'defaultRandom',
-      'QuotaPilotClosedError',
+      'the limiterClosedError',
       'peek',
       'commit',
       'refill',

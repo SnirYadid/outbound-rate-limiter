@@ -8,9 +8,9 @@
 import {describe, expect, it} from 'vitest';
 
 import {
-  QuotaPilotBudgetError,
-  QuotaPilotConfigError,
-  QuotaPilotTimeoutError,
+  LimiterBudgetError,
+  LimiterConfigError,
+  LimiterTimeoutError,
 } from '../src/errors.js';
 import {createLimiter} from '../src/limiter.js';
 import {createSeededRandom} from '../src/random.js';
@@ -53,7 +53,7 @@ describe('retry — policy validation', () => {
     const {limiter} = build();
     expect(() =>
       limiter.run(() => 'x', {retry: {maxAttempts, classify: () => ({retry: false})}})
-    ).toThrow(QuotaPilotConfigError);
+    ).toThrow(LimiterConfigError);
   });
 
   it.each([
@@ -68,7 +68,7 @@ describe('retry — policy validation', () => {
       limiter.run(() => 'x', {
         retry: {maxAttempts: 2, classify: () => ({retry: false}), [field]: value},
       })
-    ).toThrow(QuotaPilotConfigError);
+    ).toThrow(LimiterConfigError);
   });
 
   it('rejects maxDelayMs below baseDelayMs', () => {
@@ -86,7 +86,7 @@ describe('retry — policy validation', () => {
       limiter.run(() => 'x', {
         retry: {maxAttempts: 2, classify: () => ({retry: false}), jitter: 'some' as 'full'},
       })
-    ).toThrow(QuotaPilotConfigError);
+    ).toThrow(LimiterConfigError);
     expect(() =>
       limiter.run(() => 'x', {
         retry: {
@@ -95,7 +95,7 @@ describe('retry — policy validation', () => {
           retryOnAttemptTimeout: 'yes' as unknown as boolean,
         },
       })
-    ).toThrow(QuotaPilotConfigError);
+    ).toThrow(LimiterConfigError);
   });
 
   it.each([0, -1, Number.NaN, Infinity])(
@@ -103,16 +103,16 @@ describe('retry — policy validation', () => {
     (value) => {
       const {limiter} = build();
       expect(() => limiter.run(() => 'x', {attemptTimeoutMs: value})).toThrow(
-        QuotaPilotConfigError
+        LimiterConfigError
       );
-      expect(() => limiter.run(() => 'x', {totalBudgetMs: value})).toThrow(QuotaPilotConfigError);
+      expect(() => limiter.run(() => 'x', {totalBudgetMs: value})).toThrow(LimiterConfigError);
     }
   );
 
   it.each([null, 'always', 7])('rejects a retry option that is not an object: %s', (policy) => {
     const {limiter} = build();
     expect(() => limiter.run(() => 'x', {retry: policy as unknown as RetryPolicy})).toThrow(
-      QuotaPilotConfigError
+      LimiterConfigError
     );
   });
 
@@ -609,9 +609,9 @@ describe('MANDATORY 7 — provider wait hints', () => {
     await settleAll(clock, [ignore(call)]);
 
     // The hint is honoured or the call is refused — never silently shortened.
-    await expect(call).rejects.toThrow(QuotaPilotBudgetError);
+    await expect(call).rejects.toThrow(LimiterBudgetError);
     await call.catch((error: unknown) => {
-      expect((error as QuotaPilotBudgetError).cause).toBe(underlying);
+      expect((error as LimiterBudgetError).cause).toBe(underlying);
     });
     expect(attempts).toBe(1);
   });
@@ -685,7 +685,7 @@ describe('MANDATORY 8 — total deadline', () => {
     void impatient.catch(() => undefined);
 
     await clock.advance(500);
-    await expect(impatient).rejects.toThrow(QuotaPilotBudgetError);
+    await expect(impatient).rejects.toThrow(LimiterBudgetError);
     expect(ran).toBe(false);
 
     // And it left nothing behind.
@@ -706,7 +706,7 @@ describe('MANDATORY 8 — total deadline', () => {
 
     await settleAll(clock, [ignore(call)]);
 
-    await expect(call).rejects.toThrow(QuotaPilotBudgetError);
+    await expect(call).rejects.toThrow(LimiterBudgetError);
     // Attempts at 0, 100, 200, 300; a fifth would land at 400, past the budget.
     expect(attempts).toBe(4);
   });
@@ -724,9 +724,9 @@ describe('MANDATORY 8 — total deadline', () => {
 
     await settleAll(clock, [ignore(call)]);
     await call.catch((error: unknown) => {
-      expect(error).toBeInstanceOf(QuotaPilotBudgetError);
-      expect((error as QuotaPilotBudgetError).cause).toBe(last);
-      expect((error as QuotaPilotBudgetError).attempt).toBeGreaterThan(0);
+      expect(error).toBeInstanceOf(LimiterBudgetError);
+      expect((error as LimiterBudgetError).cause).toBe(last);
+      expect((error as LimiterBudgetError).attempt).toBeGreaterThan(0);
     });
   });
 
@@ -769,7 +769,7 @@ describe('MANDATORY 8 — total deadline', () => {
     );
 
     await settleAll(clock, [ignore(call)]);
-    await expect(call).rejects.toThrow(QuotaPilotBudgetError);
+    await expect(call).rejects.toThrow(LimiterBudgetError);
     expect(attempts).toBe(1);
     expect(limiter.stats()).toMatchObject({queued: 0, inflight: 0, backingOff: 0});
     expect(clock.pendingTimers()).toBe(0);
@@ -785,9 +785,9 @@ describe('MANDATORY 9 — late resolution after an attempt timeout', () => {
     void call.catch(() => undefined);
 
     await clock.advance(500);
-    await expect(call).rejects.toThrow(QuotaPilotTimeoutError);
+    await expect(call).rejects.toThrow(LimiterTimeoutError);
     await call.catch((error: unknown) => {
-      const timeout = error as QuotaPilotTimeoutError;
+      const timeout = error as LimiterTimeoutError;
       expect(timeout.timeoutMs).toBe(500);
       expect(timeout.attempt).toBe(1);
       // No cause: the attempt produced no error, it was abandoned. Whether it
@@ -808,7 +808,7 @@ describe('MANDATORY 9 — late resolution after an attempt timeout', () => {
     gate.resolve('too late');
     await clock.flush();
 
-    await expect(call).rejects.toThrow(QuotaPilotTimeoutError);
+    await expect(call).rejects.toThrow(LimiterTimeoutError);
   });
 
   it('a late REJECTION after a timeout causes no unhandled rejection', async () => {
@@ -822,7 +822,7 @@ describe('MANDATORY 9 — late resolution after an attempt timeout', () => {
     gate.reject(new Error('late failure nobody asked about'));
     await clock.flush();
 
-    await expect(call).rejects.toThrow(QuotaPilotTimeoutError);
+    await expect(call).rejects.toThrow(LimiterTimeoutError);
   });
 
   it('releases the slot exactly once when a timeout and a late finish race', async () => {
@@ -865,7 +865,7 @@ describe('MANDATORY 9 — late resolution after an attempt timeout', () => {
 
     await clock.advance(1_000);
 
-    await expect(call).rejects.toThrow(QuotaPilotTimeoutError);
+    await expect(call).rejects.toThrow(LimiterTimeoutError);
     // A timeout is not proof of failure: repeating it could duplicate a
     // non-idempotent operation, so it is opt-in.
     expect(attempts).toBe(1);
@@ -921,7 +921,7 @@ describe('MANDATORY 9 — late resolution after an attempt timeout', () => {
 
     await settleAll(clock, [ignore(call)]);
     expect(flags).toEqual([true, true]);
-    await expect(call).rejects.toThrow(QuotaPilotTimeoutError);
+    await expect(call).rejects.toThrow(LimiterTimeoutError);
   });
 
   it('cancels the timeout timer when the attempt finishes in time', async () => {
@@ -1134,7 +1134,7 @@ describe('deadline — the pump’s own expiry guard', () => {
 
     // The wake fired first, the pump admitted 'patient', then found 'doomed'
     // expired and dropped it without spending the next token on it.
-    await expect(doomed).rejects.toThrow(QuotaPilotBudgetError);
+    await expect(doomed).rejects.toThrow(LimiterBudgetError);
     await settleAll(clock, [patient]);
 
     expect(ran).toEqual(['first', 'patient']);
@@ -1160,7 +1160,7 @@ describe('deadline — the pump’s own expiry guard', () => {
     const later = limiter.run(() => void ran.push('later'), {key: 'k'});
 
     await clock.advance(100);
-    await expect(doomed).rejects.toThrow(QuotaPilotBudgetError);
+    await expect(doomed).rejects.toThrow(LimiterBudgetError);
 
     await settleAll(clock, [patient, later]);
     expect(ran).toEqual(['first', 'patient', 'later']);

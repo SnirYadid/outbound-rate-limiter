@@ -15,9 +15,9 @@
 import {describe, expect, it} from 'vitest';
 
 import {
-  QuotaPilotAbortError,
-  QuotaPilotConfigError,
-  QuotaPilotTimeoutError,
+  LimiterAbortError,
+  LimiterConfigError,
+  LimiterTimeoutError,
 } from '../src/errors.js';
 import {createLimiter} from '../src/limiter.js';
 import type {RateConstraint, RetryPolicy} from '../src/types.js';
@@ -58,7 +58,7 @@ describe('cancellation — validation and the pre-aborted case', () => {
     const {limiter} = build();
     expect(() =>
       limiter.run(() => 'x', {signal: {} as AbortSignal})
-    ).toThrow(QuotaPilotConfigError);
+    ).toThrow(LimiterConfigError);
   });
 
   it('refuses an already-aborted signal without creating a partition', async () => {
@@ -103,7 +103,7 @@ describe('cancellation — validation and the pre-aborted case', () => {
     expect(await rejection(limiter.run(() => 'x', {signal: controller.signal}))).toBe(reason);
   });
 
-  it('falls back to QuotaPilotAbortError when the signal carries no reason', async () => {
+  it('falls back to LimiterAbortError when the signal carries no reason', async () => {
     // A hand-rolled signal, as an older runtime or a shim might provide.
     const {clock, limiter} = build();
     const listeners: (() => void)[] = [];
@@ -125,7 +125,7 @@ describe('cancellation — validation and the pre-aborted case', () => {
     for (const handler of listeners) handler();
 
     const error = await rejection(call);
-    expect(error).toBeInstanceOf(QuotaPilotAbortError);
+    expect(error).toBeInstanceOf(LimiterAbortError);
     expect((error as Error).name).toBe('AbortError');
     expect(limiter.stats()).toMatchObject({inflight: 0, queued: 0, backingOff: 0});
 
@@ -740,13 +740,13 @@ describe('cancellation — resource hygiene', () => {
 
     await clock.advance(100);
 
-    await expect(call).rejects.toThrow(QuotaPilotTimeoutError);
+    await expect(call).rejects.toThrow(LimiterTimeoutError);
     expect(innerAborted).toBe(true);
   });
 });
 
 describe('cancellation — a pre-aborted signal without a reason', () => {
-  it('falls back to QuotaPilotAbortError before the call is submitted', async () => {
+  it('falls back to LimiterAbortError before the call is submitted', async () => {
     // A signal that is already aborted but carries no `reason`. A real
     // AbortController always supplies a DOMException, so this is the shape a
     // shim or an older runtime gives — and the one case where the fallback
@@ -761,7 +761,7 @@ describe('cancellation — a pre-aborted signal without a reason', () => {
 
     const error = await rejection(limiter.run(() => 'never', {key: 'k', signal: fake}));
 
-    expect(error).toBeInstanceOf(QuotaPilotAbortError);
+    expect(error).toBeInstanceOf(LimiterAbortError);
     expect((error as Error).name).toBe('AbortError');
     expect((error as Error).message).toMatch(/before it was submitted/);
     // Still no partition: a doomed call reserves nothing.

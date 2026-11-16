@@ -1,4 +1,4 @@
-%% QuotaPilot — the lifecycle of one call.
+%% outbound-rate-limiter — the lifecycle of one call.
 %%
 %% EDITABLE SOURCE for docs/diagrams/lifecycle.svg, which is what the README
 %% displays: npm does not render Mermaid, so the README needs an image.
@@ -25,16 +25,16 @@
 %%   classify / backoff  src/call.ts       decide, scheduleRetry
 flowchart TD
     RUN["limiter.run(fn, options)"] --> VALID{"options valid?"}
-    VALID -- no --> CONFIG["QuotaPilotConfigError<br/>thrown synchronously, before any promise exists"]
+    VALID -- no --> CONFIG["LimiterConfigError<br/>thrown synchronously, before any promise exists"]
     VALID -- yes --> KEY["acquire this key's partition"]
-    KEY --> KEYLIMIT["QuotaPilotKeyLimitError<br/>maxKeys reached and nothing is safe to evict"]
+    KEY --> KEYLIMIT["LimiterKeyLimitError<br/>maxKeys reached and nothing is safe to evict"]
     KEY --> MODE{"onSaturated?"}
 
     MODE -- "'reject'" --> ADMIT
     MODE -- "'wait' (default)" --> QUEUE["per-key FIFO queue<br/>bounded by maxQueueDepth"]
-    QUEUE --> QUEUEFULL["QuotaPilotQueueFullError<br/>this key already has maxQueueDepth waiting"]
+    QUEUE --> QUEUEFULL["LimiterQueueFullError<br/>this key already has maxQueueDepth waiting"]
     QUEUE --> PUMP["pump — this key's head<br/>strict FIFO; keys never block each other"]
-    PUMP -- expired --> BUDGET["QuotaPilotBudgetError<br/>the wait, or the next backoff, passes totalBudgetMs"]
+    PUMP -- expired --> BUDGET["LimiterBudgetError<br/>the wait, or the next backoff, passes totalBudgetMs"]
     PUMP --> ADMIT
 
     subgraph ATOMIC["ATOMIC ADMISSION — ONE SYNCHRONOUS STEP, NO await"]
@@ -44,12 +44,12 @@ flowchart TD
 
     ADMIT --> WAIT["blocked — it waits<br/>for exactly one wake:<br/>a rate timer, a freed slot,<br/>or this key's own completion"]
     WAIT -- woken --> PUMP
-    ADMIT --> SATURATED["QuotaPilotSaturatedError<br/>only under onSaturated: 'reject'. kind names what blocked:<br/>rate, concurrency, key-concurrency, queued-ahead"]
+    ADMIT --> SATURATED["LimiterSaturatedError<br/>only under onSaturated: 'reject'. kind names what blocked:<br/>rate, concurrency, key-concurrency, queued-ahead"]
 
     COMMIT --> ATTEMPT["fn(AttemptContext)<br/>its own AbortSignal + attemptTimeoutMs"]
     ATTEMPT --> RESOLVED["call resolves"]
-    ATTEMPT -- "timed out" --> TIMEOUT["QuotaPilotTimeoutError<br/>attempt abandoned — whether it completed is unknown"]
-    ATTEMPT -- "threw or rejected" --> CLASSIFY{"classify(error, context)<br/>yours — QuotaPilot ships no default"}
+    ATTEMPT -- "timed out" --> TIMEOUT["LimiterTimeoutError<br/>attempt abandoned — whether it completed is unknown"]
+    ATTEMPT -- "threw or rejected" --> CLASSIFY{"classify(error, context)<br/>yours — This library ships no default"}
 
     CLASSIFY -- "no retry" --> YOURS["your error, unchanged<br/>no policy, classifier said stop, or attempts exhausted"]
     CLASSIFY -- retry --> BACKOFF["backoff with full jitter<br/>a provider's Retry-After is used verbatim"]

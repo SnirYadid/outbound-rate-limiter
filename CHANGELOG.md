@@ -35,8 +35,8 @@ retry engine, cancellation, telemetry events, `drain()`, `stats()`.
 
 ### Notes
 
-- The npm name `quotapilot` was already taken, so the package is `quota-pilot`.
-  The project keeps the QuotaPilot name.
+- The npm name `quotapilot` was already taken, so the package is `outbound-rate-limiter`.
+  The project keeps the the limiter name.
 
 ## 0.1.0-alpha.1 — unreleased
 
@@ -86,7 +86,7 @@ Day 3 (M3): admission completion and introspection.
 - **Binding constraint identification.** A rate refusal now names the
   constraint responsible — the one with the longest wait, ties going to
   declaration order.
-- **`QuotaPilotSaturatedError.kind`** (`SaturationKind`): `'rate' |
+- **`LimiterSaturatedError.kind`** (`SaturationKind`): `'rate' |
   'concurrency' | 'key-concurrency' | 'queued-ahead'`. The reliable
   discriminator; `binding` is a label and only names a declared constraint for
   `'rate'`.
@@ -99,7 +99,7 @@ Day 3 (M3): admission completion and introspection.
 
 ### Changed
 
-- `QuotaPilotSaturatedError` now **requires** `kind` in its constructor, so no
+- `LimiterSaturatedError` now **requires** `kind` in its constructor, so no
   construction site can omit the discriminator. Breaking for anyone
   constructing it directly; it is a refusal the library raises, so in practice
   only the tests did.
@@ -250,7 +250,7 @@ documented limitation retracted as wrong.
 
 ### Changed
 
-- **Removed `defaultRandom` and `QuotaPilotClosedError` from the public
+- **Removed `defaultRandom` and `the limiterClosedError` from the public
   surface.** The first is reachable as the default when `random` is omitted; the
   second was never thrown by anything. Runtime exports are now 12.
 - Replaced defensive `shift()` undefined guards in `semaphore.ts` and
@@ -310,7 +310,7 @@ Same version — nothing had been published, so there was nothing to supersede.
   No npm token exists anywhere in the workflow. Defaults to a dry run.
 - README gained "Why choose it" (including the reasons not to), "Requirements"
   and a contributing section, and the install command is now
-  `npm install quota-pilot@alpha` — a plain install cannot resolve a version
+  `npm install outbound-rate-limiter@alpha` — a plain install cannot resolve a version
   that only carries the `alpha` tag.
 
 ### Targeted refactor (post-review)
@@ -366,3 +366,50 @@ delivered frozen, and the observable ordering of a multi-attempt retry.
 Coverage stayed at 100%. Also fixed a latent flake the work surfaced: the
 `07-telemetry` example asserted an exact count of `delayed` events, which
 depends on machine timing because `delayed` reports a wait rather than a call.
+
+### Renamed before first publication
+
+The package is `outbound-rate-limiter`. Same version — nothing had been
+published, so there is nothing to supersede and no compatibility aliases are
+needed.
+
+**Why.** `quota-pilot` was rejected by the registry. npm compares names after
+lowercasing and stripping punctuation, so it normalizes to `quotapilot`, which
+is published by someone else — an active, unrelated package in the AI-usage
+space. No hyphenation of the old name could have worked.
+
+**Why this name rather than another.** npm search is dominated by name-token
+matching: for `nodejs rate limiter` the top result is an obscure package whose
+description is an unrendered `<h1>` tag, ranking above `rate-limiter-flexible`
+purely on its name. And no query reliably surfaces a client-side limiter —
+`outbound rate limiter`, `client side rate limit` and `rate limit api client`
+all return inbound Express/Fastify/Hono middleware. `outbound` was the one
+qualifier nothing on npm owned, and it is also the word that prevents the most
+likely misunderstanding about what this library is for.
+
+**The eight error classes lost the brand prefix.** They are now `LimiterError`
+and friends. The prefix is `Limiter`, not `RateLimit`, deliberately: provider
+SDKs call their own 429 errors `RateLimitError`, and the entire point of this
+taxonomy is that `catch (e) { if (e instanceof LimiterError) }` means "the
+limiter refused", never "your request failed". Naming ours the same thing would
+have destroyed that distinction.
+
+| Before | After |
+|---|---|
+| `QuotaPilotError` | `LimiterError` |
+| `QuotaPilotConfigError` | `LimiterConfigError` |
+| `QuotaPilotSaturatedError` | `LimiterSaturatedError` |
+| `QuotaPilotQueueFullError` | `LimiterQueueFullError` |
+| `QuotaPilotKeyLimitError` | `LimiterKeyLimitError` |
+| `QuotaPilotBudgetError` | `LimiterBudgetError` |
+| `QuotaPilotTimeoutError` | `LimiterTimeoutError` |
+| `QuotaPilotAbortError` | `LimiterAbortError` |
+| `QuotaPilotErrorDetails` | `LimiterErrorDetails` |
+
+Inheritance, fields and behaviour are unchanged. `LimiterAbortError.name` is
+still `'AbortError'` — that deviation from the class name is a deliberate
+`fetch`/`DOMException` interop contract, not an oversight.
+
+The GitHub repository stays at `SnirYadid/quota-pilot` until staging proves the
+new package name is accepted, so `repository`, `homepage`, `bugs` and the
+README's absolute diagram URL still point there and still resolve.

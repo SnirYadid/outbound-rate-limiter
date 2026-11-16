@@ -1,11 +1,11 @@
 /**
  * Reference classifiers — to COPY, not to import.
  *
- * QuotaPilot's core contains no status codes, no header names and no
+ * This library's core contains no status codes, no header names and no
  * `Retry-After` parsing, and it never will: a default would be wrong at some
  * provider, silently. These are a starting point you own and adjust.
  */
-import type {ClassifyContext, Verdict} from 'quota-pilot';
+import type {ClassifyContext, Verdict} from 'outbound-rate-limiter';
 
 /**
  * Parses `Retry-After`, which comes in two forms: delay-seconds, or an
@@ -13,7 +13,7 @@ import type {ClassifyContext, Verdict} from 'quota-pilot';
  * unparseable — in which case the caller should fall back to ordinary backoff.
  *
  * No upper bound is imposed. A provider that names an hour gets an hour, and
- * QuotaPilot passes a hint through verbatim rather than clamping it. What keeps
+ * this library passes a hint through verbatim rather than clamping it. What keeps
  * a call from sleeping that long is `totalTimeoutMs`, which refuses the retry
  * instead of waiting past the deadline.
  */
@@ -55,7 +55,7 @@ interface ResponseLike {
  */
 export function httpClassifier(nowMs: () => number) {
   return (error: unknown, context: ClassifyContext): Verdict => {
-    // QuotaPilot abandoned this attempt. The server may have completed the
+    // the limiter abandoned this attempt. The server may have completed the
     // work, so repeating it is only safe for an idempotent operation.
     if (context.timedOut) return {retry: false};
 

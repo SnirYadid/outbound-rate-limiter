@@ -50,7 +50,7 @@ a stale wake, and it receives both as injected callbacks (`repump`,
 layer-6 modules in a cycle. There is a test asserting this specific absence,
 because the import would look innocent and the reason it matters is not local.
 
-**`types` sits below `errors`.** `QuotaPilotSaturatedError` carries a
+**`types` sits below `errors`.** `LimiterSaturatedError` carries a
 `SaturationKind`, which is part of the public vocabulary. Putting the types
 first keeps the error classes from being a second, competing source of truth
 about what the library's nouns are.

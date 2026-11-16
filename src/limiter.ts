@@ -24,10 +24,10 @@ import {
   type NormalizedConstraint,
 } from './constraints.js';
 import {
-  QuotaPilotAbortError,
-  QuotaPilotConfigError,
-  QuotaPilotQueueFullError,
-  QuotaPilotSaturatedError,
+  LimiterAbortError,
+  LimiterConfigError,
+  LimiterQueueFullError,
+  LimiterSaturatedError,
 } from './errors.js';
 import {createCall} from './call.js';
 import {createEmitter} from './telemetry.js';
@@ -55,7 +55,7 @@ export const DEFAULT_MAX_KEYS = 10_000;
 
 export function createLimiter(options: LimiterOptions): Limiter {
   if (typeof options !== 'object' || options === null) {
-    throw new QuotaPilotConfigError('createLimiter requires an options object.');
+    throw new LimiterConfigError('createLimiter requires an options object.');
   }
 
   const constraints = normalizeConstraints(options.constraints);
@@ -130,22 +130,22 @@ export function createLimiter(options: LimiterOptions): Limiter {
   const saturated = (
     outcome: Extract<AdmitOutcome, {admitted: false}>,
     key: string
-  ): QuotaPilotSaturatedError => {
+  ): LimiterSaturatedError => {
     const forKey = `for key ${JSON.stringify(key)}`;
     if (outcome.blockedBy === 'rate') {
-      return new QuotaPilotSaturatedError(
+      return new LimiterSaturatedError(
         `Rate constraint ${JSON.stringify(outcome.binding)} is saturated ${forKey}; ` +
           `capacity returns in ${outcome.waitMs}ms.`,
         {kind: 'rate', waitMs: outcome.waitMs, binding: outcome.binding, key}
       );
     }
     if (outcome.blockedBy === 'slot') {
-      return new QuotaPilotSaturatedError(
+      return new LimiterSaturatedError(
         `The limiter-wide concurrency cap (maxConcurrent = ${maxConcurrent}) is full ${forKey}.`,
         {kind: 'concurrency', waitMs: 0, binding: 'maxConcurrent', key}
       );
     }
-    return new QuotaPilotSaturatedError(
+    return new LimiterSaturatedError(
       `This key's concurrency cap (maxConcurrentPerKey = ${maxConcurrentPerKey}) is full ` +
         `${forKey}.`,
       {kind: 'key-concurrency', waitMs: 0, binding: 'maxConcurrentPerKey', key}
@@ -173,7 +173,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
           // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
           reject(
             signal.reason ??
-              new QuotaPilotAbortError('The call was aborted before it was submitted.', {key})
+              new LimiterAbortError('The call was aborted before it was submitted.', {key})
           );
           return;
         }
@@ -235,7 +235,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
 
         if (!partition.queue.enqueue(call)) {
           refuse(
-            new QuotaPilotQueueFullError(
+            new LimiterQueueFullError(
               `Queue for key ${JSON.stringify(key)} is full (${maxQueueDepth} waiting). ` +
                 'Raise maxQueueDepth, slow the producer, or reject earlier — an unbounded ' +
                 'queue would trade this error for unbounded memory.',
@@ -279,7 +279,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
 
     inspect: (key = ''): KeySnapshot => {
       if (typeof key !== 'string') {
-        throw new QuotaPilotConfigError(
+        throw new LimiterConfigError(
           `inspect() key must be a string, received ${JSON.stringify(key)}.`
         );
       }
@@ -309,7 +309,7 @@ export function createLimiter(options: LimiterOptions): Limiter {
   ): void {
     if (!partition.queue.isEmpty) {
       refuse(
-        new QuotaPilotSaturatedError(
+        new LimiterSaturatedError(
           `Key ${JSON.stringify(key)} already has ${partition.queue.size} call(s) queued. ` +
             'Rejecting rather than starting ahead of them, which would break FIFO order.',
           {kind: 'queued-ahead', waitMs: 0, binding: 'queue', key}
@@ -346,7 +346,7 @@ interface NormalizedRunOptions {
 /**
  * Validates and defaults everything `run()` was given.
  *
- * Every failure here is a `QuotaPilotConfigError` thrown synchronously, before
+ * Every failure here is a `LimiterConfigError` thrown synchronously, before
  * the caller holds a promise.
  *
  * THE ORDER OF THESE CHECKS IS BEHAVIOUR. When several options are wrong at
@@ -368,12 +368,12 @@ function normalizeRunOptions(
   constraints: readonly NormalizedConstraint[]
 ): NormalizedRunOptions {
   if (typeof fn !== 'function') {
-    throw new QuotaPilotConfigError('run() requires a function to execute.');
+    throw new LimiterConfigError('run() requires a function to execute.');
   }
 
   const key = runOptions?.key ?? '';
   if (typeof key !== 'string') {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       `run() key must be a string, received ${JSON.stringify(key)}.`
     );
   }
@@ -386,12 +386,12 @@ function normalizeRunOptions(
 
   const signal = runOptions?.signal;
   if (signal !== undefined && typeof signal.addEventListener !== 'function') {
-    throw new QuotaPilotConfigError('run() signal must be an AbortSignal, or omitted.');
+    throw new LimiterConfigError('run() signal must be an AbortSignal, or omitted.');
   }
 
   const onSaturated = runOptions?.onSaturated ?? 'wait';
   if (onSaturated !== 'wait' && onSaturated !== 'reject') {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       `run() onSaturated must be 'wait' or 'reject', received ` +
         `${JSON.stringify(onSaturated)}.`
     );
@@ -409,12 +409,12 @@ function normalizeRunOptions(
 function countOption(value: number | undefined, fallback: number, label: string): number {
   if (value === undefined) return fallback;
   if (typeof value !== 'number' || Number.isNaN(value) || value <= 0) {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       `${label} must be a positive integer or Infinity, received ${JSON.stringify(value)}.`
     );
   }
   if (value !== Infinity && !Number.isInteger(value)) {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       `${label} must be a whole number, received ${JSON.stringify(value)}.`
     );
   }
@@ -425,7 +425,7 @@ function countOption(value: number | undefined, fallback: number, label: string)
 function optionalMs(value: number | undefined, label: string): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       `run() ${label} must be a finite number greater than 0, received ${JSON.stringify(value)}.`
     );
   }
@@ -436,7 +436,7 @@ function optionalMs(value: number | undefined, label: string): number | undefine
 function sweepOption(value: number | undefined, fallback: number): number {
   if (value === undefined) return fallback;
   if (typeof value !== 'number' || Number.isNaN(value) || value < 0) {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       `sweepIntervalMs must be zero or greater, received ${JSON.stringify(value)}.`
     );
   }

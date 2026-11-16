@@ -4,7 +4,7 @@
  * The established semantics, audited rather than changed: `cost` must be a
  * finite number greater than zero and no greater than every constraint's
  * `burst`. Fractional costs are allowed. Anything else throws
- * `QuotaPilotConfigError` SYNCHRONOUSLY from `run()`.
+ * `LimiterConfigError` SYNCHRONOUSLY from `run()`.
  *
  * Synchronously, and not as a rejection, for one reason: a cost that no
  * constraint could ever admit would otherwise be a promise that never settles.
@@ -14,7 +14,7 @@
 import {describe, expect, it} from 'vitest';
 
 import {TOKEN_EPSILON} from '../src/bucket.js';
-import {QuotaPilotConfigError} from '../src/errors.js';
+import {LimiterConfigError} from '../src/errors.js';
 import {createLimiter} from '../src/limiter.js';
 import type {RateConstraint} from '../src/types.js';
 import {settleAll} from './harness/settle.js';
@@ -42,7 +42,7 @@ describe('cost — rejected values', () => {
     ['an array', [1]],
   ])('throws synchronously for %s', (_label, cost) => {
     const {limiter} = build();
-    expect(() => limiter.run(() => 'x', {cost: cost as number})).toThrow(QuotaPilotConfigError);
+    expect(() => limiter.run(() => 'x', {cost: cost as number})).toThrow(LimiterConfigError);
   });
 
   it('throws rather than returning a rejected promise', () => {
@@ -110,11 +110,11 @@ describe('cost — the burst boundary', () => {
     // so a cost above `burst` is refused even when it is within that tolerance.
     const {limiter} = build();
     expect(() => limiter.run(() => 'x', {cost: 10 + TOKEN_EPSILON})).toThrow(
-      QuotaPilotConfigError
+      LimiterConfigError
     );
     // The next representable double above 10.
     expect(() => limiter.run(() => 'x', {cost: 10 * (1 + Number.EPSILON)})).toThrow(
-      QuotaPilotConfigError
+      LimiterConfigError
     );
   });
 
@@ -257,7 +257,7 @@ describe('cost — invalid configuration is caught at construction', () => {
     ['infinite burst', {name: 'x', limit: 1, interval: 'second', burst: Infinity}],
   ])('rejects %s before any call is made', (_label, constraint) => {
     expect(() => createLimiter({constraints: [constraint as RateConstraint]})).toThrow(
-      QuotaPilotConfigError
+      LimiterConfigError
     );
   });
 
@@ -266,7 +266,7 @@ describe('cost — invalid configuration is caught at construction', () => {
     // scheduler state, or how much capacity happens to be free.
     const {limiter} = build();
     for (let repeat = 0; repeat < 5; repeat++) {
-      expect(() => limiter.run(() => 'x', {cost: 1_000})).toThrow(QuotaPilotConfigError);
+      expect(() => limiter.run(() => 'x', {cost: 1_000})).toThrow(LimiterConfigError);
     }
     expect(limiter.stats()).toEqual({keys: 0, queued: 0, inflight: 0, backingOff: 0, decisionHookErrors: 0});
   });

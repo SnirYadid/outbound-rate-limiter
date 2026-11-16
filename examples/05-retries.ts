@@ -1,12 +1,12 @@
 /**
  * Classified retries.
  *
- * QuotaPilot ships no default classifier and never will: `429` is a transient
+ * This library ships no default classifier and never will: `429` is a transient
  * throttle at one provider, an exhausted hourly budget at the next and a
  * permanent entitlement problem at a third. Only you know which.
  */
-import {createLimiter, createSeededRandom} from 'quota-pilot';
-import type {ClassifyContext, Verdict} from 'quota-pilot';
+import {createLimiter, createSeededRandom} from 'outbound-rate-limiter';
+import type {ClassifyContext, Verdict} from 'outbound-rate-limiter';
 
 /** A synthetic error shaped like an HTTP failure. */
 interface HttpLikeError extends Error {

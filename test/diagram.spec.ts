@@ -37,7 +37,7 @@ const svgBody = svg.replace(/<desc[\s\S]*?<\/desc>/, '');
 const mmdBody = mmd.replace(/^%%.*$/gm, '');
 
 const errorsIn = (text: string): string[] =>
-  [...new Set(text.match(/QuotaPilot[A-Za-z]*Error/g) ?? [])].sort();
+  [...new Set(text.match(/Limiter[A-Za-z]*Error/g) ?? [])].sort();
 
 describe('the lifecycle diagram matches the library', () => {
   it('names only error classes that are actually exported', () => {
@@ -87,7 +87,7 @@ describe('the lifecycle diagram matches the library', () => {
   });
 
   it('lists exactly the four saturation kinds', () => {
-    // These are what `QuotaPilotSaturatedError.kind` can be, and the diagram
+    // These are what `LimiterSaturatedError.kind` can be, and the diagram
     // prints them as a closed set.
     const section = /export type SaturationKind =([\s\S]*?);/.exec(types)?.[1] ?? '';
     const declared = [...new Set(section.match(/'([a-z-]+)'/g) ?? [])]
@@ -132,8 +132,8 @@ describe('the diagram source and the rendered SVG agree', () => {
 });
 
 describe('the README embeds the diagram', () => {
-  it('shows it under a "How QuotaPilot Works" heading', () => {
-    expect(readme).toContain('## How QuotaPilot Works');
+  it('shows it under a "How It Works" heading', () => {
+    expect(readme).toContain('## How It Works');
   });
 
   it('references it by absolute URL, because npm cannot resolve a relative one', () => {

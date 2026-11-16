@@ -18,7 +18,7 @@ value is accepted today.
 Rejected for now: clock-aligned fixed windows, and sliding-window logs. The
 sliding log is the only thing that gives a strict rolling bound under weighted
 costs, and it costs O(limit) memory per key. If a user needs it, the honest
-answer today is "QuotaPilot does not do that", not an approximation dressed up
+answer today is "the limiter does not do that", not an approximation dressed up
 as the real thing.
 
 ## D2 — Atomicity by construction, not by lock
@@ -55,13 +55,13 @@ identical admission timelines. That turns the claim into a proof obligation.
 
 ## D4 — A timeout is not proof of failure
 
-`retryOnAttemptTimeout` defaults to `false`. An attempt QuotaPilot itself
+`retryOnAttemptTimeout` defaults to `false`. An attempt the limiter itself
 aborted is precisely the case where the server may have completed the work, so
 retrying it by default would make the library silently unsafe for every
 non-idempotent call.
 
 `ClassifyContext.timedOut` lets a caller opt in per-case without the flag.
-`QuotaPilotTimeoutError` is its own class, carrying no `cause`, because "the
+`LimiterTimeoutError` is its own class, carrying no `cause`, because "the
 outcome is unknown" is different information from "the call failed".
 
 ## D5 — Concurrency slots are released at the timeout
@@ -91,8 +91,8 @@ nothing, because nothing was committed yet.
 
 ## D7 — Error asymmetry: library refusals are typed, caller errors pass through
 
-If QuotaPilot stopped for a reason of its own (deadline, full queue, key cap,
-cancellation, attempt timeout) it throws a `QuotaPilot*` error with `cause` set
+If the limiter stopped for a reason of its own (deadline, full queue, key cap,
+cancellation, attempt timeout) it throws a `the limiter*` error with `cause` set
 to the caller's last error when one exists.
 
 If it ran out of the attempts the caller configured, or the caller's classifier
@@ -100,7 +100,7 @@ said stop, **the caller's error surfaces unchanged**. Wrapping it would break
 `instanceof` and `.status` checks in caller code, and the attempt count is
 already on the telemetry event.
 
-So `e instanceof QuotaPilotError` reads as "the limiter refused".
+So `e instanceof LimiterError` reads as "the limiter refused".
 
 ## D8 — Two retry verdicts, not four
 
@@ -132,7 +132,7 @@ storm spend its backoff inside the bucket's own wait.
 
 No status codes, no header names, no `Retry-After` parsing. `classify` is
 required when a retry policy is present; a policy without one is a
-`QuotaPilotConfigError`.
+`LimiterConfigError`.
 
 `429` means a transient throttle at one provider, an exhausted hourly budget at
 the next, and a permanent entitlement problem at a third. A default would be
@@ -204,7 +204,7 @@ elapsed, so an injected wall clock stalls rather than inflating.
 
 ## Open questions, owned by later milestones
 
-- **O1** Should the virtual clock ship as a `quota-pilot/testing` subpath?
+- **O1** Should the virtual clock ship as a `outbound-rate-limiter/testing` subpath?
   Users can already inject their own `now`/`setTimer`, so the answer is
   probably no. Revisit when someone asks.
 - **O2** Does `drain()` need a `{discardQueued: true}` mode, or a separate hard
@@ -299,7 +299,7 @@ limit.
 ## D26 — Queue saturation is a rejection, not a throw
 
 `maxQueueDepth` is per key. Exceeding it rejects the returned promise with
-`QuotaPilotQueueFullError`, naming the key. It is a rejection rather than a
+`LimiterQueueFullError`, naming the key. It is a rejection rather than a
 synchronous throw because by that point the caller holds a promise, and mixing
 sync throws with rejections from one call site is worse than either alone.
 
@@ -358,7 +358,7 @@ the earliest-declared constraint wins. Declaration order is something the caller
 controls and can reason about, which is what makes the choice explainable rather
 than merely deterministic.
 
-## D30 — `QuotaPilotSaturatedError.kind`, and why `binding` is not enough
+## D30 — `LimiterSaturatedError.kind`, and why `binding` is not enough
 
 `binding` is a human-readable label. For `'rate'` it is a declared constraint
 name; for the concurrency kinds it names the OPTION responsible
@@ -388,7 +388,7 @@ slot and no timer, and its promise always settles.
 ## D32 — `inspect()` reads with `get`, never `acquire`
 
 `registry.acquire` creates on miss, runs an eviction sweep, and can throw
-`QuotaPilotKeyLimitError`. All three are side effects, so the read path uses
+`LimiterKeyLimitError`. All three are side effects, so the read path uses
 `registry.get` and synthesises a full-capacity snapshot for an unseen key,
 flagged `tracked: false`.
 
@@ -519,7 +519,7 @@ queueing path. `'reject'` means "do not make me wait to **start**"; a caller
 who then configures a retry policy has explicitly opted into that policy's
 delays, which are waits by definition.
 
-Mixing the two would mean a retry could fail with `QuotaPilotSaturatedError`
+Mixing the two would mean a retry could fail with `LimiterSaturatedError`
 instead of retrying, which conflates two different refusal concepts.
 
 ## D40 — A throwing classifier means "do not retry", and the real error survives

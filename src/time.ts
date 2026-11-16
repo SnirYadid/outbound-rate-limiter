@@ -13,7 +13,7 @@ export interface Clock {
   /**
    * Milliseconds, non-decreasing.
    *
-   * All of QuotaPilot's arithmetic is durations, so the reading must never go
+   * All of the library's arithmetic is durations, so the reading must never go
    * backwards. `realClock` therefore uses a monotonic source rather than
    * `Date.now()`, which an NTP correction can move backwards. The bucket math
    * is additionally defensive about this (a negative delta is treated as zero

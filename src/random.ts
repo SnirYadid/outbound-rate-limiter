@@ -2,7 +2,7 @@
  * The randomness seam.
  *
  * This is the ONLY module in `src/` permitted to name `Math.random`. Jitter is
- * the one place QuotaPilot is non-deterministic, so it is injected and can be
+ * the one place this library is non-deterministic, so it is injected and can be
  * replaced wholesale in tests.
  */
 

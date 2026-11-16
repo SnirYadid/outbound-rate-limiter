@@ -49,7 +49,7 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 
-import {QuotaPilotAbortError, QuotaPilotBudgetError, QuotaPilotTimeoutError} from './errors.js';
+import {LimiterAbortError, LimiterBudgetError, LimiterTimeoutError} from './errors.js';
 import type {Partition, QueuedCall} from './partition.js';
 import {computeBackoffMs, providerHintMs, type NormalizedRetryPolicy} from './retry.js';
 import type {RandomFn} from './random.js';
@@ -187,8 +187,8 @@ export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCal
     });
   };
 
-  const budgetRefusal = (): QuotaPilotBudgetError =>
-    new QuotaPilotBudgetError(
+  const budgetRefusal = (): LimiterBudgetError =>
+    new LimiterBudgetError(
       `Total budget of ${String(spec.totalBudgetMs)}ms for key ` +
         `${JSON.stringify(spec.key)} elapsed after ${attempts} attempt(s).`,
       {
@@ -286,7 +286,7 @@ export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCal
     // fallback is for hand-rolled or older signal implementations.
     const reason: unknown = spec.signal?.reason;
     if (reason !== undefined) return reason;
-    return new QuotaPilotAbortError('The call was aborted.', {
+    return new LimiterAbortError('The call was aborted.', {
       key: spec.key,
       attempt: attempts,
       elapsedMs: elapsed(),
@@ -490,7 +490,7 @@ export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCal
       const timeoutMs = spec.attemptTimeoutMs;
       timeoutTimer = clock.setTimer(() => {
         timeoutTimer = undefined;
-        const timeoutError = new QuotaPilotTimeoutError(
+        const timeoutError = new LimiterTimeoutError(
           `Attempt ${attemptNumber} for key ${JSON.stringify(spec.key)} exceeded ` +
             `${timeoutMs}ms and was abandoned. Whether the operation completed is UNKNOWN.`,
           {timeoutMs, key: spec.key, attempt: attemptNumber, elapsedMs: elapsed()}
@@ -505,7 +505,7 @@ export function createCall<T>(spec: CallSpec<T>, env: CallEnvironment): BuiltCal
         // concurrency guarantee is stated in terms of OBSERVABLE work.
         controller.abort(timeoutError);
 
-        // Retrying an attempt QuotaPilot itself abandoned is opt-in (D4): the
+        // Retrying an attempt the limiter itself abandoned is opt-in (D4): the
         // server may have completed the work, so repeating it by default would
         // make this library silently unsafe for anything non-idempotent.
         if (spec.retry?.retryOnAttemptTimeout === true) {

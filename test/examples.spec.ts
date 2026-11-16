@@ -6,7 +6,7 @@
  * README example that no longer compiles is worse than no example — it costs a
  * reader time and then teaches them something false. These examples are the
  * ones the README quotes verbatim, and they import the package by name
- * (`from 'quota-pilot'`) exactly as a consumer's code would.
+ * (`from 'outbound-rate-limiter'`) exactly as a consumer's code would.
  *
  * These are the only tests that use real time, because the examples are what a
  * consumer actually writes and a consumer does not inject a clock. The delays

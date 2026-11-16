@@ -3,23 +3,23 @@
  *
  * The governing rule, and the reason the taxonomy looks asymmetric:
  *
- *   - If QuotaPilot stopped for a reason of its OWN — a deadline, a full
+ *   - If the limiter stopped for a reason of its OWN — a deadline, a full
  *     queue, a key cap, cancellation, a per-attempt timeout — it throws one of
  *     these, with `cause` set to the caller's last error when one exists.
  *
- *   - If QuotaPilot ran out of the attempts the CALLER configured, or the
+ *   - If the limiter ran out of the attempts the CALLER configured, or the
  *     caller's own classifier said stop, the caller's error surfaces
  *     unchanged. Wrapping it would break `instanceof` and `.status` checks in
  *     the caller's code, and the attempt count is already on the telemetry
  *     event.
  *
- * So `catch (e) { if (e instanceof QuotaPilotError) ... }` means "the limiter
+ * So `catch (e) { if (e instanceof LimiterError) ... }` means "the limiter
  * refused", never "your request failed".
  */
 
 import type {SaturationKind} from './types.js';
 
-export interface QuotaPilotErrorDetails {
+export interface LimiterErrorDetails {
   /** The partition key the call was running under, when known. */
   readonly key?: string;
   /** 1-based attempt number at the moment of refusal, when known. */
@@ -30,16 +30,16 @@ export interface QuotaPilotErrorDetails {
   readonly cause?: unknown;
 }
 
-export class QuotaPilotError extends Error {
+export class LimiterError extends Error {
   readonly key: string | undefined;
   readonly attempt: number | undefined;
   readonly elapsedMs: number | undefined;
 
-  constructor(message: string, details: QuotaPilotErrorDetails = {}) {
+  constructor(message: string, details: LimiterErrorDetails = {}) {
     super(message, 'cause' in details ? {cause: details.cause} : undefined);
     // Set explicitly rather than from `new.target.name`, which a minifier can
     // mangle. Every subclass restates it.
-    this.name = 'QuotaPilotError';
+    this.name = 'LimiterError';
     this.key = details.key;
     this.attempt = details.attempt;
     this.elapsedMs = details.elapsedMs;
@@ -54,10 +54,10 @@ export class QuotaPilotError extends Error {
  * because a configuration mistake is a programming error and should fail where
  * it was written.
  */
-export class QuotaPilotConfigError extends QuotaPilotError {
-  constructor(message: string, details?: QuotaPilotErrorDetails) {
+export class LimiterConfigError extends LimiterError {
+  constructor(message: string, details?: LimiterErrorDetails) {
     super(message, details);
-    this.name = 'QuotaPilotConfigError';
+    this.name = 'LimiterConfigError';
   }
 }
 
@@ -69,7 +69,7 @@ export class QuotaPilotConfigError extends QuotaPilotError {
  * for the other kinds it names the option or the condition responsible, which
  * a constraint could in principle be named after.
  */
-export class QuotaPilotSaturatedError extends QuotaPilotError {
+export class LimiterSaturatedError extends LimiterError {
   /** What stopped the call. The reliable discriminator. */
   readonly kind: SaturationKind;
   /**
@@ -86,10 +86,10 @@ export class QuotaPilotSaturatedError extends QuotaPilotError {
 
   constructor(
     message: string,
-    info: QuotaPilotErrorDetails & {kind: SaturationKind; waitMs: number; binding: string}
+    info: LimiterErrorDetails & {kind: SaturationKind; waitMs: number; binding: string}
   ) {
     super(message, info);
-    this.name = 'QuotaPilotSaturatedError';
+    this.name = 'LimiterSaturatedError';
     this.kind = info.kind;
     this.waitMs = info.waitMs;
     this.binding = info.binding;
@@ -97,10 +97,10 @@ export class QuotaPilotSaturatedError extends QuotaPilotError {
 }
 
 /** The key's wait queue was at `maxQueueDepth`. */
-export class QuotaPilotQueueFullError extends QuotaPilotError {
-  constructor(message: string, details?: QuotaPilotErrorDetails) {
+export class LimiterQueueFullError extends LimiterError {
+  constructor(message: string, details?: LimiterErrorDetails) {
     super(message, details);
-    this.name = 'QuotaPilotQueueFullError';
+    this.name = 'LimiterQueueFullError';
   }
 }
 
@@ -109,18 +109,18 @@ export class QuotaPilotQueueFullError extends QuotaPilotError {
  * alternative is discarding a partially drained bucket, which hands out free
  * capacity. See docs/GUARANTEES.md, "Key eviction".
  */
-export class QuotaPilotKeyLimitError extends QuotaPilotError {
-  constructor(message: string, details?: QuotaPilotErrorDetails) {
+export class LimiterKeyLimitError extends LimiterError {
+  constructor(message: string, details?: LimiterErrorDetails) {
     super(message, details);
-    this.name = 'QuotaPilotKeyLimitError';
+    this.name = 'LimiterKeyLimitError';
   }
 }
 
 /** `totalBudgetMs` would be exceeded by the next wait or attempt. */
-export class QuotaPilotBudgetError extends QuotaPilotError {
-  constructor(message: string, details?: QuotaPilotErrorDetails) {
+export class LimiterBudgetError extends LimiterError {
+  constructor(message: string, details?: LimiterErrorDetails) {
     super(message, details);
-    this.name = 'QuotaPilotBudgetError';
+    this.name = 'LimiterBudgetError';
   }
 }
 
@@ -131,13 +131,13 @@ export class QuotaPilotBudgetError extends QuotaPilotError {
  * the remote operation completed is UNKNOWN — that is the whole point of this
  * being its own error class rather than folded into a generic failure.
  */
-export class QuotaPilotTimeoutError extends QuotaPilotError {
+export class LimiterTimeoutError extends LimiterError {
   /** The timeout that fired, in milliseconds. */
   readonly timeoutMs: number;
 
-  constructor(message: string, info: QuotaPilotErrorDetails & {timeoutMs: number}) {
+  constructor(message: string, info: LimiterErrorDetails & {timeoutMs: number}) {
     super(message, info);
-    this.name = 'QuotaPilotTimeoutError';
+    this.name = 'LimiterTimeoutError';
     this.timeoutMs = info.timeoutMs;
   }
 }
@@ -150,8 +150,8 @@ export class QuotaPilotTimeoutError extends QuotaPilotError {
  * the one place the taxonomy's naming rule is broken on purpose. When the
  * signal carried a `reason`, that is rethrown instead of this class.
  */
-export class QuotaPilotAbortError extends QuotaPilotError {
-  constructor(message = 'Aborted', details?: QuotaPilotErrorDetails) {
+export class LimiterAbortError extends LimiterError {
+  constructor(message = 'Aborted', details?: LimiterErrorDetails) {
     super(message, details);
     this.name = 'AbortError';
   }

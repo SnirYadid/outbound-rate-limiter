@@ -5,8 +5,8 @@
  * no error objects or request payloads — your classifier already saw the
  * error, and telemetry should not become a second copy of your request bodies.
  */
-import {createLimiter} from 'quota-pilot';
-import type {Decision} from 'quota-pilot';
+import {createLimiter} from 'outbound-rate-limiter';
+import type {Decision} from 'outbound-rate-limiter';
 
 export async function main(): Promise<{
   kinds: string[];

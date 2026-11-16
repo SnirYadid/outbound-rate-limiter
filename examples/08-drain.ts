@@ -4,7 +4,7 @@
  * It waits for every call accepted BEFORE the invocation, backoffs included.
  * It does not close the limiter and does not reject new work.
  */
-import {createLimiter} from 'quota-pilot';
+import {createLimiter} from 'outbound-rate-limiter';
 
 export async function main(): Promise<{before: string[]; after: string}> {
   const limiter = createLimiter({

@@ -2,9 +2,9 @@
  * Weighted calls, for providers that price requests in credits.
  *
  * `burst` must be at least your largest `cost`, or that call could never be
- * admitted — QuotaPilot rejects it synchronously rather than waiting forever.
+ * admitted — the limiter rejects it synchronously rather than waiting forever.
  */
-import {createLimiter, QuotaPilotConfigError} from 'quota-pilot';
+import {createLimiter, LimiterConfigError} from 'outbound-rate-limiter';
 
 export async function main(): Promise<{available: number; refused: boolean}> {
   const limiter = createLimiter({
@@ -20,7 +20,7 @@ export async function main(): Promise<{available: number; refused: boolean}> {
     // Above `burst`: impossible, so it fails at the call site.
     await limiter.run(() => 'absurd', {key: 'shop', cost: 10_000});
   } catch (error) {
-    refused = error instanceof QuotaPilotConfigError;
+    refused = error instanceof LimiterConfigError;
   }
 
   return {available: limiter.inspect('shop').constraints[0]?.available ?? -1, refused};

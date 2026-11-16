@@ -81,7 +81,7 @@ export interface AttemptContext {
    * Aborted when the caller's own signal fires, or when this attempt exceeds
    * `attemptTimeoutMs`. **Thread it into whatever you call.**
    *
-   * QuotaPilot cannot stop your code; it can only ask. A task that ignores
+   * The limiter cannot stop your code; it can only ask. A task that ignores
    * this keeps running after the limiter has moved on — see
    * docs/GUARANTEES.md, "Guarantees conditional on cooperative cancellation".
    */
@@ -95,7 +95,7 @@ export interface ClassifyContext {
   /** Milliseconds since `run()` was called. */
   readonly elapsedMs: number;
   /**
-   * True when QuotaPilot aborted this attempt on `attemptTimeoutMs`.
+   * True when the limiter aborted this attempt on `attemptTimeoutMs`.
    *
    * Whether the remote operation completed is UNKNOWN in that case, so a
    * classifier should decline unless the operation is idempotent. Only ever
@@ -125,7 +125,7 @@ export interface RetryPolicy {
   /**
    * Decides whether an error is worth retrying. **Required.**
    *
-   * QuotaPilot ships no default and never will: `429` is a transient throttle
+   * This library ships no default and never will: `429` is a transient throttle
    * at one provider, an exhausted hourly budget at the next, and a permanent
    * entitlement problem at a third. Only you know which.
    *
@@ -154,7 +154,7 @@ export interface RetryPolicy {
   readonly jitter?: 'full' | 'none';
 
   /**
-   * Whether to retry an attempt QuotaPilot abandoned on `attemptTimeoutMs`.
+   * Whether to retry an attempt the limiter abandoned on `attemptTimeoutMs`.
    * Defaults to **false**.
    *
    * A timeout is not proof of failure: the server may have completed the work.
@@ -190,7 +190,7 @@ export interface RunOptions {
    *
    * `'reject'` means "start now or fail now": the call is never queued, so it
    * holds no capacity, no slot and no timer. The returned promise rejects with
-   * `QuotaPilotSaturatedError`, whose `kind` says what stopped it.
+   * `LimiterSaturatedError`, whose `kind` says what stopped it.
    *
    * Note that `'reject'` also refuses when the key already has calls queued,
    * reported as `kind: 'queued-ahead'`. Starting ahead of them would break
@@ -209,12 +209,12 @@ export interface RunOptions {
    * Abandon one attempt after this many milliseconds.
    *
    * On expiry the `AbortSignal` on that attempt's `AttemptContext` is aborted
-   * and QuotaPilot stops waiting for the promise. Thread that signal into
-   * whatever you call — QuotaPilot asks your task to stop and cannot compel
+   * and the limiter stops waiting for the promise. Thread that signal into
+   * whatever you call — The limiter asks your task to stop and cannot compel
    * it, so a task that ignores the signal keeps running, and the concurrency
    * cap is therefore a bound on OBSERVABLE work.
    *
-   * The call rejects with `QuotaPilotTimeoutError`, which deliberately carries
+   * The call rejects with `LimiterTimeoutError`, which deliberately carries
    * no `cause`: the attempt produced no error, it was abandoned, and whether
    * the remote operation completed is unknown. That is why
    * `retry.retryOnAttemptTimeout` defaults to false — repeating work that may
@@ -235,7 +235,7 @@ export interface RunOptions {
    * Aborting BEFORE an attempt starts consumes no rate capacity. Aborting
    * after one has started does not refund what it spent — the request was
    * sent. The rejection is the signal's own `reason` when it has one, so it
-   * interoperates with `fetch`; otherwise a `QuotaPilotAbortError`. Either way
+   * interoperates with `fetch`; otherwise a `LimiterAbortError`. Either way
    * `error.name === 'AbortError'`.
    */
   readonly signal?: AbortSignal;
@@ -445,7 +445,7 @@ export interface LimiterOptions {
 
   /**
    * Maximum calls queued per key before `run()` rejects with
-   * `QuotaPilotQueueFullError`. Defaults to 1024.
+   * `LimiterQueueFullError`. Defaults to 1024.
    *
    * Finite by design: an unbounded queue trades a clear error for unbounded
    * memory.
@@ -455,10 +455,10 @@ export interface LimiterOptions {
   /**
    * Maximum partitions tracked at once. Defaults to 10,000.
    *
-   * When the registry is full, QuotaPilot evicts only partitions whose
+   * When the registry is full, the limiter evicts only partitions whose
    * capacity has fully recovered and which have no queued or running work —
    * dropping one of those is unobservable. If none qualifies, `run()` rejects
-   * with `QuotaPilotKeyLimitError` rather than discarding capacity that is
+   * with `LimiterKeyLimitError` rather than discarding capacity that is
    * still owed.
    */
   readonly maxKeys?: number;
@@ -476,7 +476,7 @@ export interface LimiterOptions {
   /**
    * Time source. Defaults to a monotonic real clock.
    *
-   * Replace it to make tests deterministic — QuotaPilot reads no other clock,
+   * Replace it to make tests deterministic — the library reads no other clock,
    * so with an injected one no test ever has to sleep.
    */
   readonly clock?: Clock;
@@ -517,10 +517,10 @@ export interface Limiter {
    * capacity. Each attempt receives an `AttemptContext` carrying its attempt
    * number and an `AbortSignal`.
    *
-   * The rejection tells you who gave up. A `QuotaPilot*` error means the
+   * The rejection tells you who gave up. A `the limiter*` error means the
    * limiter refused — a full queue, an untrackable key, a saturated
    * constraint under `'reject'`, an exhausted `totalBudgetMs`, an
-   * `attemptTimeoutMs` — so `catch (e) { if (e instanceof QuotaPilotError) }`
+   * `attemptTimeoutMs` — so `catch (e) { if (e instanceof LimiterError) }`
    * reads as "the limiter stopped this", never "the request failed". Anything
    * else is whatever `fn` threw, unchanged, including when the attempts you
    * configured ran out or your classifier said stop.

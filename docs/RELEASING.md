@@ -44,7 +44,7 @@ Nothing in this list is automated, because all of it happens outside the repo.
       needs an authenticated session (`npm profile get`).
 - [x] Local npm is **11.15.0 or later** on Node **22.14.0 or later**.
       → npm 12.2.2 on Node 22.22.3.
-- [x] Confirm the name is still free: `npm view quota-pilot` 404s.
+- [x] Confirm the name is still free: `npm view outbound-rate-limiter` 404s.
 - [ ] `npm login`. Interactive (browser + 2FA), so it cannot be scripted. Until
       this is done, `npm whoami` reports ENEEDAUTH and nothing can be staged.
 
@@ -75,7 +75,7 @@ npm stage publish --tag alpha
 `npm stage publish --dry-run` announce *"with tag latest"*. Whether that is a
 display bug or the real behaviour cannot be settled without doing a publish,
 and a dist-tag cannot be unassigned — only moved, after `npm install
-quota-pilot` has already started resolving to an alpha. The dry run above
+outbound-rate-limiter` has already started resolving to an alpha. The dry run above
 prints the tag it would use; check that line says `alpha` before running the
 real command.
 
@@ -87,7 +87,7 @@ needs — without anything installable having been released.
 
 ### Step 3.2 — check whether the settings page is now available
 
-Open npmjs.com → `quota-pilot` → **Settings**. Either the Trusted Publisher
+Open npmjs.com → `outbound-rate-limiter` → **Settings**. Either the Trusted Publisher
 section is there or it is not.
 
 npm's documentation states that staging creates the package, but does **not**
@@ -139,13 +139,13 @@ Enable the direct-publish option, use it once to validate, and switch to
 
 ## 4. Configure the npm trusted publisher
 
-On npmjs.com → the `quota-pilot` package → **Settings** → **Trusted Publisher**:
+On npmjs.com → the `outbound-rate-limiter` package → **Settings** → **Trusted Publisher**:
 
 | Field | Value |
 |---|---|
 | Provider | GitHub Actions |
 | Organization / user | the repository owner |
-| Repository | `quota-pilot` |
+| Repository | `outbound-rate-limiter` |
 | Workflow filename | `release.yml` |
 | Environment | `release` |
 
@@ -183,7 +183,7 @@ npm stage download <stage-id>     # inspect the real tarball
 npm stage approve <stage-id>      # 2FA
 ```
 
-7. Verify: `npm view quota-pilot@alpha version`, then install it into an empty
+7. Verify: `npm view outbound-rate-limiter@alpha version`, then install it into an empty
    directory and import it.
 8. Tag the commit: `git tag v0.1.0-alpha.5 && git push origin v0.1.0-alpha.5`,
    and write the GitHub release notes from the changelog entry.
@@ -214,5 +214,5 @@ only in git history. While the line stays alpha:
   `--tag alpha` at every call site. `publishConfig.tag` is set as well and the
   preflight checks it, but it is not sufficient on its own — see step 3.1.
 - The `latest` tag stays unclaimed until 0.1.0. Until then
-  `npm install quota-pilot` deliberately resolves nothing — asking for
+  `npm install outbound-rate-limiter` deliberately resolves nothing — asking for
   `@alpha` is the opt-in.

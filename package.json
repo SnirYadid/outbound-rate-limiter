@@ -1,10 +1,12 @@
 {
-  "name": "quota-pilot",
+  "name": "outbound-rate-limiter",
   "version": "0.1.0-alpha.5",
-  "description": "Outbound API rate limiting, scheduling and retries for Node. Multi-constraint weighted token buckets with deterministic tests.",
+  "description": "Outbound API rate limiting for Node and TypeScript. Weighted multi-constraint token buckets, per-key partitioning, bounded queues, concurrency caps, classified retries with Retry-After, and AbortSignal cancellation. Single process, zero dependencies.",
   "keywords": [
+    "outbound",
     "rate-limit",
     "rate-limiter",
+    "api-rate-limit",
     "token-bucket",
     "throttle",
     "retry",
@@ -15,10 +17,9 @@
     "concurrency-limit",
     "queue",
     "scheduler",
-    "quota",
-    "api-client",
     "abortsignal",
-    "typescript"
+    "typescript",
+    "nodejs"
   ],
   "license": "MIT",
   "author": "Snir Yadid",

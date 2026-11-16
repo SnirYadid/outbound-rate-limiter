@@ -9,7 +9,7 @@
 
 import {describe, expect, it} from 'vitest';
 
-import {QuotaPilotConfigError, QuotaPilotSaturatedError} from '../src/errors.js';
+import {LimiterConfigError, LimiterSaturatedError} from '../src/errors.js';
 import {createLimiter} from '../src/limiter.js';
 import type {RateConstraint, SaturationKind} from '../src/types.js';
 import {deferred, ignore} from './harness/deferred.js';
@@ -25,11 +25,11 @@ function build(constraints: RateConstraint[], extra: Record<string, unknown> = {
 }
 
 /** Reads the refusal off a rejected call. */
-async function refusal(promise: Promise<unknown>): Promise<QuotaPilotSaturatedError> {
+async function refusal(promise: Promise<unknown>): Promise<LimiterSaturatedError> {
   try {
     await promise;
   } catch (error) {
-    if (error instanceof QuotaPilotSaturatedError) return error;
+    if (error instanceof LimiterSaturatedError) return error;
     throw error;
   }
   throw new Error('expected the call to be refused, but it resolved');
@@ -61,7 +61,7 @@ describe('onSaturated — defaults and validation', () => {
     const {limiter} = build(paced);
     expect(() =>
       limiter.run(() => 'x', {onSaturated: 'maybe' as unknown as 'wait'})
-    ).toThrow(QuotaPilotConfigError);
+    ).toThrow(LimiterConfigError);
   });
 
   it('runs immediately when there is capacity', async () => {

@@ -2,13 +2,13 @@
  * Turns user-facing `RateConstraint`s into bucket parameters, and rejects
  * configurations that could never work.
  *
- * All validation is synchronous and throws `QuotaPilotConfigError`. A bad
+ * All validation is synchronous and throws `LimiterConfigError`. A bad
  * configuration is a programming error; it should fail where it was written,
  * not surface as a rejected promise three layers away.
  */
 
 import type {BucketSpec} from './bucket.js';
-import {QuotaPilotConfigError} from './errors.js';
+import {LimiterConfigError} from './errors.js';
 import type {IntervalUnit, RateConstraint} from './types.js';
 
 const INTERVAL_MS: Record<IntervalUnit, number> = {
@@ -49,7 +49,7 @@ export function normalizeConstraints(
   // this; the types had been quietly off since day one.
   const asUnknown: unknown = input;
   if (!Array.isArray(asUnknown) || input.length === 0) {
-    throw new QuotaPilotConfigError('At least one rate constraint is required.');
+    throw new LimiterConfigError('At least one rate constraint is required.');
   }
 
   const seen = new Set<string>();
@@ -57,15 +57,15 @@ export function normalizeConstraints(
     const where = `constraints[${index}]`;
 
     if (typeof constraint !== 'object' || constraint === null) {
-      throw new QuotaPilotConfigError(`${where} must be an object.`);
+      throw new LimiterConfigError(`${where} must be an object.`);
     }
     const {name, limit, interval, burst, strategy} = constraint;
 
     if (typeof name !== 'string' || name.length === 0) {
-      throw new QuotaPilotConfigError(`${where}.name must be a non-empty string.`);
+      throw new LimiterConfigError(`${where}.name must be a non-empty string.`);
     }
     if (seen.has(name)) {
-      throw new QuotaPilotConfigError(
+      throw new LimiterConfigError(
         `Duplicate constraint name ${JSON.stringify(name)}. ` +
           'Names identify which limit bound a call, so they must be unique.'
       );
@@ -73,7 +73,7 @@ export function normalizeConstraints(
     seen.add(name);
 
     if (strategy !== undefined && strategy !== 'bucket') {
-      throw new QuotaPilotConfigError(
+      throw new LimiterConfigError(
         `${where}.strategy ${JSON.stringify(strategy)} is not supported in this release. ` +
           "Omit it, or pass 'bucket'."
       );
@@ -108,7 +108,7 @@ export function constraintWarnings(
     if (constraint.intervalMs > LONG_WINDOW_MS) {
       warnings.push(
         `Constraint ${JSON.stringify(constraint.name)} spans ` +
-          `${Math.round(constraint.intervalMs / 60_000)} minutes. QuotaPilot keeps its ` +
+          `${Math.round(constraint.intervalMs / 60_000)} minutes. This library keeps its ` +
           'state in this process only, so a window longer than the process lifetime is ' +
           'not enforceable: a restart resets it, and several instances each get the ' +
           'full allowance. Enforce long quotas in shared storage instead.'
@@ -132,7 +132,7 @@ export function assertCostAdmissible(
   assertPositiveFinite(cost, 'cost');
   for (const constraint of constraints) {
     if (cost > constraint.burst) {
-      throw new QuotaPilotConfigError(
+      throw new LimiterConfigError(
         `cost ${cost} exceeds the burst capacity of constraint ` +
           `${JSON.stringify(constraint.name)} (${constraint.burst}), so it could never be ` +
           `admitted. Raise that constraint's burst to at least your largest cost.`
@@ -152,7 +152,7 @@ function parseInterval(interval: number | IntervalUnit, label: string): number {
   if (typeof interval === 'string') {
     const resolved: number | undefined = INTERVAL_MS[interval];
     if (resolved === undefined) {
-      throw new QuotaPilotConfigError(
+      throw new LimiterConfigError(
         `${label} ${JSON.stringify(interval)} is not a known unit. ` +
           "Use milliseconds, or one of 'second' | 'minute' | 'hour' | 'day'."
       );
@@ -165,7 +165,7 @@ function parseInterval(interval: number | IntervalUnit, label: string): number {
 
 function assertPositiveFinite(value: unknown, label: string): void {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-    throw new QuotaPilotConfigError(
+    throw new LimiterConfigError(
       `${label} must be a finite number greater than 0, received ${JSON.stringify(value)}.`
     );
   }
