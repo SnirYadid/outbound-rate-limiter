@@ -40,11 +40,13 @@ Nothing in this list is automated, because all of it happens outside the repo.
 ## 2. npm account preparation
 
 - [ ] 2FA enabled on the npm account. Staged publishing requires it, and
-      approving a staged version prompts for it.
-- [ ] Local npm is **11.15.0 or later** on Node **22.14.0 or later**. The npm
-      bundled with Node is usually older — check with `npm --version` and
-      upgrade with `npm install -g npm@latest` if needed.
-- [ ] Confirm the name is still free: `npm view quota-pilot` should 404.
+      approving a staged version prompts for it. **Unverified** — checking it
+      needs an authenticated session (`npm profile get`).
+- [x] Local npm is **11.15.0 or later** on Node **22.14.0 or later**.
+      → npm 12.2.2 on Node 22.22.3.
+- [x] Confirm the name is still free: `npm view quota-pilot` 404s.
+- [ ] `npm login`. Interactive (browser + 2FA), so it cannot be scripted. Until
+      this is done, `npm whoami` reports ENEEDAUTH and nothing can be staged.
 
 ## 3. First publication (bootstrap)
 
@@ -63,8 +65,19 @@ first and confirm with `npm --version`.
 ```bash
 npm run verify            # lint, typecheck, tests, build, consumer smoke
 node scripts/preflight.mjs --registry
-npm stage publish         # publishConfig pins --tag alpha and public access
+npm stage publish --tag alpha --dry-run   # read the summary line first
+npm stage publish --tag alpha
 ```
+
+**Pass `--tag alpha` explicitly. Do not rely on `publishConfig.tag`.** On npm
+12.2.2, `npm config list` reports `tag = "alpha"` from `publishConfig` while
+`npm config get tag` reports `latest`, and both `npm publish --dry-run` and
+`npm stage publish --dry-run` announce *"with tag latest"*. Whether that is a
+display bug or the real behaviour cannot be settled without doing a publish,
+and a dist-tag cannot be unassigned — only moved, after `npm install
+quota-pilot` has already started resolving to an alpha. The dry run above
+prints the tag it would use; check that line says `alpha` before running the
+real command.
 
 Staging a package that has never been published creates the package on the
 registry with a placeholder version `0.0.0-stage`. The placeholder is publicly
@@ -197,9 +210,9 @@ only in git history. While the line stays alpha:
 
 - Breaking changes are allowed between alpha versions and must be in the
   changelog under **Changed**, naming what breaks.
-- Every alpha goes out under the `alpha` dist-tag. `publishConfig.tag` makes
-  that the default so it cannot be forgotten, and the preflight fails if a
-  prerelease version is paired with any other tag.
+- Every alpha goes out under the `alpha` dist-tag, passed **explicitly** as
+  `--tag alpha` at every call site. `publishConfig.tag` is set as well and the
+  preflight checks it, but it is not sufficient on its own — see step 3.1.
 - The `latest` tag stays unclaimed until 0.1.0. Until then
   `npm install quota-pilot` deliberately resolves nothing — asking for
   `@alpha` is the opt-in.

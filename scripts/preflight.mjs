@@ -75,8 +75,19 @@ if (!read('CHANGELOG.md').includes(`## ${declared}`)) {
 
 // --- dist-tag -------------------------------------------------------------
 // A prerelease that lands on `latest` is installed by everyone who types
-// `npm i quota-pilot`. publishConfig.tag is what prevents that, including on
-// a manual publish from a laptop.
+// `npm i quota-pilot`, and a dist-tag assignment cannot be undone by deleting
+// anything — only moved, after the damage.
+//
+// `publishConfig.tag` is checked here, but DO NOT TRUST IT ALONE. On npm
+// 12.2.2 `npm config list` reports `tag = "alpha"` from publishConfig while
+// `npm config get tag` reports `latest`, and both `npm publish --dry-run` and
+// `npm stage publish --dry-run` announce "with tag latest". Whether that is a
+// display bug or the effective behaviour could not be established without
+// performing a real publish, which is exactly the thing that cannot be undone.
+//
+// So the rule is: pass `--tag alpha` explicitly at every call site. The
+// release workflow does on both its paths, and docs/RELEASING.md says so for
+// the manual one. This check is the belt, not the braces.
 const prerelease = declared.includes('-');
 const tag = pkg.publishConfig?.tag;
 if (prerelease && tag !== 'alpha') {
