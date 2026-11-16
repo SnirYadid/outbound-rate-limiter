@@ -6,22 +6,22 @@ concurrency control, classified retries, honest guarantees, deterministic
 tests, zero runtime dependencies.
 
 ```bash
-npm install outbound-rate-limiter@alpha
-```
-
-**The `@alpha` is required, not optional.** This release line is published
-under the `alpha` dist-tag only. A plain `npm install outbound-rate-limiter`
-resolves the `latest` tag, which currently points at `0.0.0-stage` — a
-343-byte placeholder npm created when the package was first staged. Installing
-it gets you nothing; it contains no code. `latest` is deliberately left there
-until a stable `0.1.0`, so that nobody pulls a prerelease by typing the obvious
-thing.
-
-So: ask for `@alpha` explicitly, or pin an exact version.
-
-```bash
+npm install outbound-rate-limiter           # resolves 0.1.0-alpha.6
+npm install outbound-rate-limiter@alpha     # the same build, asked for explicitly
 npm install outbound-rate-limiter@0.1.0-alpha.6   # pinned
 ```
+
+> [!IMPORTANT]
+> **There is no stable release yet. The default install gives you an alpha.**
+> Both the `latest` and `alpha` dist-tags point at `0.1.0-alpha.6`, so a plain
+> `npm install` resolves a prerelease — not the production-ready version that
+> `latest` usually implies.
+>
+> It is an alpha for a specific reason, not as a formality: the API has not yet
+> been used by anyone outside its own test suite. Expect the shape of the
+> options to change before `0.1.0`. **Pin an exact version** if you depend on
+> it, and read [the guarantees](docs/GUARANTEES.md) rather than assuming the
+> usual ones.
 
 > **This library bounds outbound traffic from one Node process.**
 > There is no shared store. If you run N instances, your effective ceiling is
@@ -35,10 +35,8 @@ signed attestation tying the published tarball to the workflow run and the
 commit it was built from. `npm audit signatures` reports a verified registry
 signature and a verified attestation.
 
-The feature set is frozen for this line and no new features are planned. It is
-an alpha because the API has not yet been used by anyone outside its own test
-suite — expect the shape of the options to be refined before `0.1.0`, and read
-[the guarantees](docs/GUARANTEES.md) rather than assuming the usual ones.
+The feature set is frozen for this line and no new features are planned — the
+remaining work before `0.1.0` is API refinement, not additions.
 
 ---
 
