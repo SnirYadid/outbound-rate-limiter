@@ -29,11 +29,16 @@ npm install outbound-rate-limiter@0.1.0-alpha.6   # pinned
 > way and the limiter will warn you if you try. Read
 > [Single-process scope](#single-process-scope) before adopting it.
 
-**Status: 0.1.0-alpha.** The feature set is frozen for this line and no new
-features are planned. It is an alpha because the API has not yet been used by
-anyone outside its own test suite — expect the shape of the options to be
-refined before 0.1.0, and read [the guarantees](docs/GUARANTEES.md) rather than
-assuming the usual ones.
+**Status: `0.1.0-alpha.6`, published on npm with verified provenance.** The
+release is built and published by GitHub Actions over OIDC, so npm carries a
+signed attestation tying the published tarball to the workflow run and the
+commit it was built from. `npm audit signatures` reports a verified registry
+signature and a verified attestation.
+
+The feature set is frozen for this line and no new features are planned. It is
+an alpha because the API has not yet been used by anyone outside its own test
+suite — expect the shape of the options to be refined before `0.1.0`, and read
+[the guarantees](docs/GUARANTEES.md) rather than assuming the usual ones.
 
 ---
 
