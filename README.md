@@ -9,9 +9,19 @@ tests, zero runtime dependencies.
 npm install outbound-rate-limiter@alpha
 ```
 
-The `@alpha` is required, not optional: this release line is published under
-the `alpha` dist-tag, so a plain `npm install outbound-rate-limiter` will not
-resolve it.
+**The `@alpha` is required, not optional.** This release line is published
+under the `alpha` dist-tag only. A plain `npm install outbound-rate-limiter`
+resolves the `latest` tag, which currently points at `0.0.0-stage` — a
+343-byte placeholder npm created when the package was first staged. Installing
+it gets you nothing; it contains no code. `latest` is deliberately left there
+until a stable `0.1.0`, so that nobody pulls a prerelease by typing the obvious
+thing.
+
+So: ask for `@alpha` explicitly, or pin an exact version.
+
+```bash
+npm install outbound-rate-limiter@0.1.0-alpha.6   # pinned
+```
 
 > **This library bounds outbound traffic from one Node process.**
 > There is no shared store. If you run N instances, your effective ceiling is

@@ -18,7 +18,7 @@
  * docs/GUARANTEES.md for what that does and does not promise.
  */
 
-export const VERSION = '0.1.0-alpha.5';
+export const VERSION = '0.1.0-alpha.6';
 
 export {createLimiter} from './limiter.js';
 export type {

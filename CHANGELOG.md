@@ -35,8 +35,10 @@ retry engine, cancellation, telemetry events, `drain()`, `stats()`.
 
 ### Notes
 
-- The npm name `quotapilot` was already taken, so the package is `outbound-rate-limiter`.
-  The project keeps the the limiter name.
+- The npm name `quotapilot` was already taken, so this milestone used
+  `quota-pilot`. That turned out not to be publishable either — see the rename
+  entry below — and the package is now `outbound-rate-limiter`. At the time the
+  project was called QuotaPilot.
 
 ## 0.1.0-alpha.1 — unreleased
 
@@ -417,3 +419,45 @@ README's diagram URL point there. GitHub keeps serving the old paths — web URL
 redirect, and `raw.githubusercontent.com` serves the old path directly — so the
 already-staged `0.1.0-alpha.5` tarball, which has the old URLs baked in, is
 unaffected.
+
+## 0.1.0-alpha.6 — unreleased
+
+First release intended to go out through GitHub Actions with OIDC trusted
+publishing, so the artifact carries a provenance attestation. `0.1.0-alpha.5`
+was published from a laptop and has none.
+
+No runtime, public API or architecture change. The library is byte-for-byte the
+same behaviour; this version exists to exercise the release path.
+
+### Fixed
+
+- **The release workflow could not have authenticated.** It used
+  `actions/setup-node` with `registry-url`, which writes
+  `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into `.npmrc`. Under
+  trusted publishing there is no `NODE_AUTH_TOKEN` by design, so that line
+  expands to an empty token and npm has been reported to treat it as "auth is
+  already configured" and never begin the OIDC exchange — failing with
+  `ENEEDAUTH`.
+
+  Upstream disagrees with itself: npm/documentation#1960 is open against the
+  official example, while actions/setup-node#1551 was closed as not
+  reproducible. Rather than bet a release on whose test was right, the input is
+  simply gone. Nothing needed it — the default registry is already
+  registry.npmjs.org and this package is public and unscoped.
+
+  A new step asserts no `_authToken` line exists in `.npmrc` or `~/.npmrc`
+  before the publish step runs, so if a future edit reintroduces one the run
+  fails with a message naming the cause rather than an `ENEEDAUTH` that points
+  nowhere near it.
+
+### Changed
+
+- `actions/setup-node` v4 → v7 in both workflows. v4 targets Node 20, which
+  GitHub now force-runs on Node 24 with a deprecation warning. Both workflows
+  move together on purpose: CI then exercises the same action version the
+  release workflow will use, so the release path is not the first place a
+  problem with it would appear.
+- README is explicit that `latest` points at the `0.0.0-stage` placeholder and
+  that `@alpha` or an exact version is required. A plain install returns a
+  343-byte stub containing no code, which is a confusing thing to discover on
+  your own.

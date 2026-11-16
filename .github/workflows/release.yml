@@ -61,14 +61,42 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # Node 26 is the active LTS. It is also the newest line the test
           # matrix covers, so the publish runs on a version already proven
           # green rather than on whatever the runner defaults to.
           node-version: '26'
-          registry-url: 'https://registry.npmjs.org'
           cache: npm
+          # `registry-url` is deliberately NOT set.
+          #
+          # It writes `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`
+          # into .npmrc. With no NODE_AUTH_TOKEN — which is the whole point of
+          # trusted publishing — that line expands to an empty token, and npm
+          # has been reported to treat it as "auth is already configured" and
+          # never start the OIDC exchange, failing with ENEEDAUTH.
+          #
+          # Upstream disagrees with itself about this: npm/documentation#1960
+          # is open against the official example, while actions/setup-node#1551
+          # was closed as not reproducible. Rather than bet a release on whose
+          # test was right, drop the input. Nothing needs it: the default
+          # registry is already registry.npmjs.org and this package is public
+          # and unscoped.
+
+      - name: Assert no auth token is configured
+        # The guard for the above. If a future edit reintroduces `registry-url`
+        # or anything else writes a token line, fail here with a message that
+        # names the cause, rather than at the publish step with an ENEEDAUTH
+        # that points nowhere near it.
+        run: |
+          for f in .npmrc ~/.npmrc; do
+            if [ -f "$f" ] && grep -q '_authToken' "$f"; then
+              echo "::error::${f} contains an _authToken line. Trusted publishing needs"
+              echo "::error::no token at all; an empty one stops npm starting the OIDC exchange."
+              exit 1
+            fi
+          done
+          echo "no _authToken line in .npmrc or ~/.npmrc — OIDC exchange can proceed"
 
       - name: Use an npm that supports trusted publishing and staging
         # Trusted publishing needs npm >= 11.5.1; staged publishing needs

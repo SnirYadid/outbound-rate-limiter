@@ -1,6 +1,6 @@
 {
   "name": "outbound-rate-limiter",
-  "version": "0.1.0-alpha.5",
+  "version": "0.1.0-alpha.6",
   "description": "Outbound API rate limiting for Node and TypeScript. Weighted multi-constraint token buckets, per-key partitioning, bounded queues, concurrency caps, classified retries with Retry-After, and AbortSignal cancellation. Single process, zero dependencies.",
   "keywords": [
     "outbound",
