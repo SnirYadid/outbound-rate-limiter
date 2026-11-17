@@ -52,7 +52,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Refuse to release from anywhere but main
         run: |
